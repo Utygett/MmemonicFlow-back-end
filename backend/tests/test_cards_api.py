@@ -14,29 +14,26 @@ from app.models.user import User
 from app.api.routes.cards import get_db as original_get_db
 
 # -----------------------------
-# DB session fixture с транзакцией
+# DB session fixture
 # -----------------------------
 @pytest.fixture
 def db():
     db = SessionLocal()
     try:
-        # Начинаем nested transaction (savepoint)
-        db.begin_nested()
         yield db
-        # После теста откатываем изменения
-        db.rollback()
     finally:
         db.close()
 
 
 # -----------------------------
-# TestClient с override get_db
+# TestClient fixture с override get_db
 # -----------------------------
 @pytest.fixture
 def client_with_db(db):
     app.dependency_overrides[original_get_db] = lambda: db
     yield TestClient(app)
     app.dependency_overrides = {}
+
 
 # -----------------------------
 # Fixtures для тестовых данных
@@ -52,7 +49,10 @@ def user(db):
     db.add(u)
     db.commit()
     db.refresh(u)
-    return u
+    yield u
+    db.delete(u)
+    db.commit()
+
 
 @pytest.fixture
 def deck(db, user):
@@ -66,7 +66,10 @@ def deck(db, user):
     db.add(d)
     db.commit()
     db.refresh(d)
-    return d
+    yield d
+    db.delete(d)
+    db.commit()
+
 
 @pytest.fixture
 def card(db, deck):
@@ -80,7 +83,10 @@ def card(db, deck):
     db.add(c)
     db.commit()
     db.refresh(c)
-    return c
+    yield c
+    db.delete(c)
+    db.commit()
+
 
 @pytest.fixture
 def progress(db, card, user):
@@ -95,7 +101,10 @@ def progress(db, card, user):
     db.add(p)
     db.commit()
     db.refresh(p)
-    return p
+    yield p
+    db.delete(p)
+    db.commit()
+
 
 @pytest.fixture
 def user_settings(db, user):
@@ -109,7 +118,10 @@ def user_settings(db, user):
     db.add(s)
     db.commit()
     db.refresh(s)
-    return s
+    yield s
+    db.delete(s)
+    db.commit()
+
 
 # -----------------------------
 # API тесты

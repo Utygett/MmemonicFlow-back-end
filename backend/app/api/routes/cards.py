@@ -10,6 +10,7 @@ from app.models.card_progress import CardProgress
 from app.models.user_learning_settings import UserLearningSettings
 from app.schemas.card_review import CardForReview, ReviewRequest, ReviewResponse
 from app.services.review_service import ReviewService
+from app.models.card_review_history import CardReviewHistory
 
 router = APIRouter()
 
@@ -59,33 +60,61 @@ def get_cards_for_review(user_id: str, limit: int = 20, db: Session = Depends(ge
 # -------------------------------
 @router.post("/{card_id}/review", response_model=ReviewResponse)
 def review_card(card_id: str, request: ReviewRequest, user_id: str, db: Session = Depends(get_db)):
+    # 1. Получаем текущий прогресс
     progress = db.query(CardProgress).filter_by(card_id=card_id, user_id=user_id).first()
     if not progress:
         raise HTTPException(status_code=404, detail="Progress not found")
 
+    # 2. Получаем карточку
     card = db.get(Card, card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    # 3. Получаем настройки пользователя
     settings = db.query(UserLearningSettings).filter_by(user_id=user_id).first()
     if not settings:
         raise HTTPException(status_code=404, detail="User settings not found")
 
-    updated_progress = ReviewService.review(
+    # 4. Вызываем domain-сервис (чистый)
+    from app.services.review_service import ReviewService
+    updated_state = ReviewService.review(
         card=card,
         progress=progress,
-        rating=request.rating,
-        user_settings=settings
+        rating=request.rating.value  # передаем строку
     )
 
-    db.add(updated_progress)
-    db.commit()
-    db.refresh(updated_progress)
+    # 5. Обновляем прогресс в БД
+    progress.current_level = updated_state.current_level
+    progress.active_level = updated_state.active_level
+    progress.streak = updated_state.streak
+    progress.last_reviewed = updated_state.last_reviewed
+    progress.next_review = updated_state.next_review
+    db.add(progress)
 
+    # 6. Создаём запись в истории повторений
+    history_entry = CardReviewHistory(
+        user_id=progress.user_id,
+        card_id=progress.card_id,
+        rating=request.rating,
+        interval_minutes=int((progress.next_review - progress.last_reviewed).total_seconds() // 60),
+        streak=progress.streak,
+        reviewed_at=progress.last_reviewed
+    )
+    db.add(history_entry)
+
+    # 7. Коммитим изменения
+    db.commit()
+    db.refresh(progress)
+
+    # 8. Возвращаем результат
     return ReviewResponse(
         card_id=card.id,
-        next_review=updated_progress.next_review,
-        current_level=updated_progress.current_level,
-        active_level=updated_progress.active_level,
-        streak=updated_progress.streak
+        next_review=progress.next_review,
+        current_level=progress.current_level,
+        active_level=progress.active_level,
+        streak=progress.streak
     )
+
 
 # -------------------------------
 # Список карточек (с фильтром по deck_id)

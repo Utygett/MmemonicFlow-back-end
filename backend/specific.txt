@@ -1,0 +1,104 @@
+Flashcards Server – Functional Specification
+1. Введение
+Сервер предназначен для управления расширенным приложением по обучению с помощью карточек (аналог Anki). Основные возможности:
+Управление пользователями, колодами и карточками.
+Учёт прогресса пользователя по карточкам.
+Алгоритм повторений с учётом уровня карточки, streak и индивидуальных настроек пользователя.
+История повторений для анализа прогресса.
+Совместное обучение через группы и управление доступом к колодам.
+2. Сущности
+2.1 Пользователь (User)
+Поля: id, email, password_hash, username
+Связи:
+card_progress: список прогресса по карточкам
+learning_settings: настройки обучения
+review_history: история повторений
+2.2 Колода (Deck)
+Поля: id, owner_id, title, description, color, is_public
+Приватные колоды доступны только владельцу
+Может быть привязана к группам через StudyGroupDeck и UserStudyGroupDeck
+2.3 Карточка (Card)
+Поля: id, deck_id, title, type, max_level
+Связи:
+progress: прогресс пользователей
+review_history: история повторений
+levels: уровни карточки (CardLevel) с контентом
+tags: теги карточки (пока фильтры не нужны)
+2.4 Уровень карточки (CardLevel)
+Поля: id, card_id, level_index, content (JSON)
+Контент может быть разного типа: текст, cloze, изображение, аудио и т.д.
+Содержит данные, соответствующие текущему уровню сложности
+2.5 Прогресс карточки (CardProgress)
+Поля: user_id, card_id, current_level, active_level, streak, next_review, last_reviewed
+Уникальная комбинация user_id + card_id
+Обновляется после повторения через domain-логику
+2.6 История повторений (CardReviewHistory)
+Поля: user_id, card_id, rating, interval_minutes, streak, reviewed_at
+Сохраняется при каждом повторении
+2.7 Настройки пользователя (UserLearningSettings)
+Поля: user_id, base_interval_minutes, level_factor, streak_factor, again_penalty
+Используются для расчёта next_review
+2.8 Группы обучения
+StudyGroup – системные группы
+UserStudyGroup – пользовательские группы
+StudyGroupDeck и UserStudyGroupDeck – связь групп с колодами
+Доступ к колодам зависит от принадлежности к группе или приватности
+3. API
+3.1 Получение карточек для повторения
+GET /cards/review?user_id=<user_id>&limit=<n>
+Логика:
+Выбираются карточки с next_review <= now
+Ограничение по limit
+Отдаётся текущий прогресс и контент соответствующего уровня (CardLevel)
+3.2 Отправка результата повторения
+POST /cards/{card_id}/review?user_id=<user_id>
+Логика:
+Применяется рейтинг через domain-логику (CardProgressState + ReviewPolicy)
+Обновляется CardProgress и создаётся запись в CardReviewHistory
+Возвращает обновлённые данные прогресса и next_review
+3.3 Список карточек
+GET /cards/?deck_id=<deck_id>
+Возвращает базовую информацию карточек (id, title, deck_id, max_level)
+3.4 Прогресс конкретной карточки
+GET /cards/{card_id}/progress
+Возвращает: текущий уровень, активный уровень, стрик, next_review
+3.5 Управление группами (CRUD)
+POST /groups/ – создать группу
+GET /groups/ – список групп пользователя
+GET /groups/{group_id} – детали группы
+PUT /groups/{group_id} – обновить группу
+DELETE /groups/{group_id} – удалить группу
+Колоды группы управляются через UserStudyGroupDeck / StudyGroupDeck
+4. Domain-логика
+4.1 CardProgressState
+Чистое состояние прогресса карточки
+Методы:
+apply_rating(rating, max_level, reviewed_at) – применяет рейтинг, обновляет уровни и стрик
+_validate(max_level) – проверка invariants
+4.2 ReviewPolicy
+Алгоритм расчёта next_review
+Учитывает:
+базовый интервал
+рейтинг пользователя
+уровень карточки и стрик
+штраф за "again"
+4.3 ReviewService
+Сервис для интеграции domain-логики с БД
+Обновляет CardProgress и сохраняет CardReviewHistory
+5. Алгоритм повторений
+Получаем состояние карточки (CardProgressState) и настройки пользователя.
+Применяем рейтинг через apply_rating.
+Рассчитываем next_review через ReviewPolicy.
+Обновляем CardProgress в БД.
+Создаём запись в CardReviewHistory.
+6. Правила доступа
+Приватные колоды – видны только владельцу
+Колоды группы – доступны только участникам группы
+API должен проверять принадлежность пользователя к колоде или группе
+7. История и статистика
+Полная история повторений хранится в CardReviewHistory
+Позволяет строить графики прогресса и анализировать обучение
+8. Тестирование
+Unit-тесты для domain-логики (entities, policy)
+Интеграционные тесты для API (/cards/review, /cards/{card_id}/review, /cards/{card_id}/progress)
+Проверка алгоритма повторений с разными рейтингами

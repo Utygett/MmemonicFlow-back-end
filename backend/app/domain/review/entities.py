@@ -61,13 +61,5 @@ class CardProgressState:
 
         self.streak += 1
 
-        # 2. Уровни
-        if (
-            self.active_level == self.current_level
-            and self.current_level < max_level
-        ):
-            self.current_level += 1
-            self.active_level = self.current_level
-
         # 3. Проверка инвариантов
         self._validate(max_level=max_level)
