@@ -1,13 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
+from uuid import UUID
+from datetime import datetime, timezone
+
 from app.db.session import SessionLocal
 from app.models.card import Card
 from app.models.card_progress import CardProgress
 from app.models.user_learning_settings import UserLearningSettings
 from app.schemas.card_review import CardForReview, ReviewRequest, ReviewResponse
 from app.services.review_service import ReviewService
-from datetime import datetime
 
 router = APIRouter()
 
@@ -27,7 +29,7 @@ def get_cards_for_review(user_id: str, limit: int = 20, db: Session = Depends(ge
     progress_list = (
         db.query(CardProgress)
         .filter(CardProgress.user_id == user_id)
-        .filter(CardProgress.next_review <= datetime.utcnow())
+        .filter(CardProgress.next_review <= datetime.now(timezone.utc))
         .order_by(CardProgress.next_review.asc())
         .limit(limit)
         .all()
@@ -36,7 +38,7 @@ def get_cards_for_review(user_id: str, limit: int = 20, db: Session = Depends(ge
     result = []
     for progress in progress_list:
         card = db.get(Card, progress.card_id)
-        level_content = {}  # можно брать текущий уровень через CardLevel, если нужно
+        level_content = {}
         result.append(
             CardForReview(
                 card_id=card.id,
@@ -63,6 +65,8 @@ def review_card(card_id: str, request: ReviewRequest, user_id: str, db: Session 
 
     card = db.get(Card, card_id)
     settings = db.query(UserLearningSettings).filter_by(user_id=user_id).first()
+    if not settings:
+        raise HTTPException(status_code=404, detail="User settings not found")
 
     updated_progress = ReviewService.review(
         card=card,
@@ -71,7 +75,6 @@ def review_card(card_id: str, request: ReviewRequest, user_id: str, db: Session 
         user_settings=settings
     )
 
-    # Сохраняем изменения в базе
     db.add(updated_progress)
     db.commit()
     db.refresh(updated_progress)
@@ -84,10 +87,15 @@ def review_card(card_id: str, request: ReviewRequest, user_id: str, db: Session 
         streak=updated_progress.streak
     )
 
-
-@router.get("/")
-def list_cards(db: Session = Depends(get_db)):
-    cards = db.query(Card).limit(20).all()
+# -------------------------------
+# Список карточек (с фильтром по deck_id)
+# -------------------------------
+@router.get("/", response_model=List[dict])
+def list_cards(deck_id: Optional[UUID] = Query(None), db: Session = Depends(get_db)):
+    query = db.query(Card)
+    if deck_id:
+        query = query.filter(Card.deck_id == deck_id)
+    cards = query.limit(20).all()
 
     return [
         {
@@ -99,16 +107,14 @@ def list_cards(db: Session = Depends(get_db)):
         for card in cards
     ]
 
+# -------------------------------
+# Прогресс конкретной карточки
+# -------------------------------
 @router.get("/{card_id}/progress")
 def card_progress(card_id: str, db: Session = Depends(get_db)):
-    progress = (
-        db.query(CardProgress)
-        .filter(CardProgress.card_id == card_id)
-        .first()
-    )
-
+    progress = db.query(CardProgress).filter(CardProgress.card_id == card_id).first()
     if not progress:
-        return {"error": "progress not found"}
+        raise HTTPException(status_code=404, detail="Progress not found")
 
     return {
         "card_id": str(progress.card_id),
