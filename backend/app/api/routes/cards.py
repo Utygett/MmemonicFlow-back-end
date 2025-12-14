@@ -1,9 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
-from typing import List, Optional
-from uuid import UUID
 from datetime import datetime, timezone
-
+from sqlalchemy.orm import Session
+from app.models.deck import Deck
+from app.models.card import Card
+from app.models.card_level import CardLevel
+from app.models.user_study_group_deck import UserStudyGroupDeck
+from app.models.user_study_group import UserStudyGroup
+from app.schemas.cards import DeckWithCards, CardSummary
+from typing import Optional, List
+from uuid import UUID
 from app.db.session import SessionLocal
 from app.models.card import Card
 from app.models.card_progress import CardProgress
@@ -11,6 +16,10 @@ from app.models.user_learning_settings import UserLearningSettings
 from app.schemas.card_review import CardForReview, ReviewRequest, ReviewResponse
 from app.services.review_service import ReviewService
 from app.models.card_review_history import CardReviewHistory
+from app.models import Deck
+from app.models.card_level import CardLevel
+from app.schemas.cards import DeckWithCards, CardSummary, CardLevelContent
+
 
 router = APIRouter()
 
@@ -117,24 +126,79 @@ def review_card(card_id: str, request: ReviewRequest, user_id: str, db: Session 
 
 
 # -------------------------------
-# Список карточек (с фильтром по deck_id)
+# Список колод с карточками, фильтрацией по deck_id, приватности и группам
 # -------------------------------
-@router.get("/", response_model=List[dict])
-def list_cards(deck_id: Optional[UUID] = Query(None), db: Session = Depends(get_db)):
-    query = db.query(Card)
-    if deck_id:
-        query = query.filter(Card.deck_id == deck_id)
-    cards = query.limit(20).all()
+@router.get("/", response_model=List[DeckWithCards])
+def list_decks_with_cards(
+    user_id: str,
+    deck_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db)
+):
+    # -------------------------------
+    # 1. Собираем доступные колоды
+    # -------------------------------
+    accessible_deck_ids = set()
 
-    return [
-        {
-            "id": str(card.id),
-            "title": card.title,
-            "deck_id": str(card.deck_id),
-            "max_level": card.max_level,
-        }
-        for card in cards
-    ]
+    # Публичные колоды
+    public_decks = db.query(Deck.id).filter(Deck.is_public == True)
+    accessible_deck_ids.update([d.id for d in public_decks])
+
+    # Собственные колоды пользователя
+    own_decks = db.query(Deck.id).filter(Deck.owner_id == user_id)
+    accessible_deck_ids.update([d.id for d in own_decks])
+
+    # Колоды групп пользователя
+    group_decks = (
+        db.query(UserStudyGroupDeck.deck_id)
+        .join(UserStudyGroup, UserStudyGroupDeck.user_group_id == UserStudyGroup.id)
+        .filter(UserStudyGroup.user_id == user_id)
+        .all()
+    )
+    accessible_deck_ids.update([d.deck_id for d in group_decks])
+
+    # Если указан конкретный deck_id, фильтруем
+    if deck_id:
+        if deck_id in accessible_deck_ids:
+            accessible_deck_ids = {deck_id}
+        else:
+            accessible_deck_ids = set()
+
+    # -------------------------------
+    # 2. Берем колоды и карточки
+    # -------------------------------
+    decks = db.query(Deck).filter(Deck.id.in_(accessible_deck_ids)).all()
+    result = []
+
+    for deck in decks:
+        cards = db.query(Card).filter(Card.deck_id == deck.id).all()
+        card_summaries = []
+
+        for card in cards:
+            # Берем все уровни карточки
+            levels = db.query(CardLevel).filter(CardLevel.card_id == card.id).all()
+            levels_data = [
+                CardLevelContent(level_index=l.level_index, content=l.content)
+                for l in levels
+            ]
+
+            card_summaries.append(
+                CardSummary(
+                    card_id=card.id,
+                    title=card.title,
+                    type=card.type,
+                    levels=levels_data
+                )
+            )
+
+        result.append(
+            DeckWithCards(
+                deck_id=deck.id,
+                title=deck.title,
+                cards=card_summaries
+            )
+        )
+
+    return result
 
 # -------------------------------
 # Прогресс конкретной карточки

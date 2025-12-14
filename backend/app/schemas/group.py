@@ -1,7 +1,6 @@
-from pydantic import BaseModel
 from typing import Optional
+from pydantic import BaseModel
 from uuid import UUID
-
 
 class GroupCreate(BaseModel):
     title: str
@@ -19,3 +18,9 @@ class GroupResponse(BaseModel):
     title: str
     description: Optional[str] = None
     parent_id: Optional[UUID] = None
+
+class CardSummary(BaseModel):
+    card_id: UUID
+    title: str
+    type: str
+

@@ -12,6 +12,14 @@ from app.models.user_learning_settings import UserLearningSettings
 from app.models.deck import Deck
 from app.models.user import User
 from app.api.routes.cards import get_db as original_get_db
+from app.models.user import User
+from app.models.deck import Deck
+from app.models.card import Card
+from app.db.session import SessionLocal
+from sqlalchemy.orm import Session
+from app.models.study_group import StudyGroup
+from sqlalchemy import text
+from app.models.user_study_group import UserStudyGroup
 
 # -----------------------------
 # DB session fixture
@@ -122,15 +130,168 @@ def user_settings(db, user):
     db.delete(s)
     db.commit()
 
+# --- пользователи ---
+
+@pytest.fixture
+def other_user(db: Session):
+    u = User(
+        id=str(uuid.uuid4()),
+        email="other@example.com",
+        username="user2",
+        password_hash="hashed_password"
+    )
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    yield u
+    db.delete(u)
+    db.commit()
+
+# --- колоды ---
+@pytest.fixture
+def deck(db: Session, user: User):
+    d = Deck(
+        id=str(uuid.uuid4()),
+        title="Deck 1",
+        owner_id=user.id,
+        is_public=True  # у тебя public вместо private
+    )
+    db.add(d)
+    db.commit()
+    db.refresh(d)
+    yield d
+    db.delete(d)
+    db.commit()
+
+@pytest.fixture
+def other_deck(db: Session, other_user: User):
+    d = Deck(
+        id=str(uuid.uuid4()),
+        title="Deck 2",
+        owner_id=other_user.id,
+        is_public=True
+    )
+    db.add(d)
+    db.commit()
+    db.refresh(d)
+    yield d
+    db.delete(d)
+    db.commit()
+
+# --- карточки ---
+@pytest.fixture
+def card(db: Session, deck: Deck):
+    c = Card(
+        id=str(uuid.uuid4()),
+        deck_id=deck.id,
+        title="Card 1",
+        type="basic",
+        max_level=3
+    )
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    yield c
+    db.delete(c)
+    db.commit()
+
+@pytest.fixture
+def group(db: Session, user: User):
+    g = StudyGroup(
+        id=str(uuid.uuid4()),
+        title="Test Group",
+        owner_id=user.id
+    )
+    db.add(g)
+    db.commit()
+    db.refresh(g)
+    yield g
+    db.delete(g)
+    db.commit()
+
+@pytest.fixture
+def user_group(db: Session, user):
+    group = UserStudyGroup(
+        id=uuid.uuid4(),
+        user_id=user.id,  # правильно используем user_id
+        title_override="Test Group",
+        source_group_id=None,
+        parent_id=None
+    )
+    db.add(group)
+    db.commit()
+    db.refresh(group)
+    yield group
+    db.delete(group)
+    db.commit()
+
+@pytest.fixture
+def deck_in_group(db: Session, user_group: UserStudyGroup, user: User):
+    d = Deck(
+        id=str(uuid.uuid4()),
+        title="Deck In Group",
+        owner_id=user.id,
+        is_public=True
+    )
+    db.add(d)
+    db.commit()
+    db.refresh(d)
+
+    # Привязываем к user_study_group
+    db.execute(
+        text(
+            "INSERT INTO user_study_group_decks (user_group_id, deck_id, order_index) "
+            "VALUES (:user_group_id, :deck_id, :order_index)"
+        ),
+        {"user_group_id": user_group.id, "deck_id": d.id, "order_index": 0}
+    )
+    db.commit()
+
+    yield d
+
+    # Teardown
+    db.execute(
+        text(
+            "DELETE FROM user_study_group_decks WHERE user_group_id = :user_group_id AND deck_id = :deck_id"
+        ),
+        {"user_group_id": user_group.id, "deck_id": d.id}
+    )
+    db.delete(d)
+    db.commit()
+
+
+@pytest.fixture
+def deck_not_in_group(db: Session, other_user: User):
+    d = Deck(
+        id=str(uuid.uuid4()),
+        title="Deck Not In Group",
+        owner_id=other_user.id,  # другой пользователь
+        is_public=False
+    )
+    db.add(d)
+    db.commit()
+    db.refresh(d)
+    yield d
+    db.delete(d)
+    db.commit()
+
 
 # -----------------------------
 # API тесты
 # -----------------------------
-def test_list_cards(deck, card, client_with_db):
-    response = client_with_db.get(f"/cards/?deck_id={deck.id}")
+def test_list_cards(deck, card, user, client_with_db):
+    response = client_with_db.get(
+        f"/cards/?deck_id={deck.id}&user_id={user.id}"
+    )
     assert response.status_code == 200
+
     data = response.json()
-    assert any(c["id"] == str(card.id) for c in data), f"Cards returned: {data}"
+
+    assert any(
+        c["card_id"] == str(card.id)
+        for deck in data
+        for c in deck["cards"]
+    ), f"Cards returned: {data}"
 
 
 def test_card_progress(progress, client_with_db):
@@ -185,3 +346,79 @@ def test_review_not_found(user, client_with_db):
         json={"rating": "good"},
     )
     assert response.status_code == 404
+
+
+# ----------------------------
+# 1️⃣ Проверка наличия levels
+# ----------------------------
+def test_card_levels_present(deck, card, user, client_with_db):
+    response = client_with_db.get(
+        f"/cards/?deck_id={deck.id}&user_id={user.id}"
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    found = False
+    for d in data:
+        for c in d["cards"]:
+            if c["card_id"] == str(card.id):
+                assert "levels" in c, "Card should have 'levels'"
+                assert isinstance(c["levels"], list), "'levels' should be a list"
+                found = True
+    assert found, f"Card {card.id} not found in response"
+
+
+# ----------------------------
+# 2️⃣ Проверка content внутри levels
+# ----------------------------
+def test_card_levels_content(deck, card, user, client_with_db):
+    response = client_with_db.get(
+        f"/cards/?deck_id={deck.id}&user_id={user.id}"
+    )
+    data = response.json()
+
+    for d in data:
+        for c in d["cards"]:
+            if c["card_id"] == str(card.id):
+                for level in c["levels"]:
+                    assert "content" in level, "Level should have 'content'"
+                    assert isinstance(level["content"], dict), "'content' should be a dict"
+
+
+# ----------------------------
+# 3️⃣ Проверка фильтрации по is_public / owner_id
+# ----------------------------
+def test_only_accessible_decks(deck, other_deck, user, client_with_db):
+    """
+    deck: текущий пользовательский deck
+    other_deck: чужая приватная колода
+    """
+    response = client_with_db.get(f"/cards/?user_id={user.id}")
+    data = response.json()
+
+    deck_ids = [d["deck_id"] for d in data]
+
+    # Пользователь должен видеть свою колоду
+    assert str(deck.id) in deck_ids
+    # Не должен видеть чужую приватную колоду
+    if not other_deck.is_public:
+        assert str(other_deck.id) not in deck_ids
+
+
+# ----------------------------
+# 4️⃣ Проверка фильтрации по группам (если используется)
+# ----------------------------
+def test_group_filtered_decks(user, group, deck_in_group, deck_not_in_group, client_with_db):
+    """
+    deck_in_group: колода, которая привязана к группе пользователя
+    deck_not_in_group: колода, которая НЕ привязана к группе пользователя
+    """
+    response = client_with_db.get(
+        f"/cards/?user_id={user.id}"
+    )
+    data = response.json()
+
+    deck_ids = [d["deck_id"] for d in data]
+
+    assert str(deck_in_group.id) in deck_ids
+    assert str(deck_not_in_group.id) not in deck_ids

@@ -7,6 +7,11 @@ from app.db.session import SessionLocal
 from app.models.study_group import StudyGroup
 from app.models.user_study_group import UserStudyGroup
 from app.schemas.group import GroupCreate, GroupUpdate, GroupResponse
+from app.schemas.cards import DeckWithCards, CardSummary
+from app.models.user_study_group_deck import UserStudyGroupDeck
+from app.models.deck import Deck
+from app.models.card import Card
+
 
 router = APIRouter()
 
@@ -135,3 +140,44 @@ def delete_group(group_id: str, user_id: str, db: Session = Depends(get_db)):
     db.commit()
 
     return {"status": "deleted"}
+
+# -------------------------------
+# Получить колоды группы вместе с карточками
+# -------------------------------
+@router.get("/{group_id}/decks", response_model=list[DeckWithCards])
+def get_group_decks(group_id: str, user_id: str, db: Session = Depends(get_db)):
+    # Проверяем, что пользователь связан с группой
+    user_group = db.query(UserStudyGroup).filter(
+        UserStudyGroup.user_id == user_id,
+        UserStudyGroup.source_group_id == group_id
+    ).first()
+    if not user_group:
+        raise HTTPException(status_code=404, detail="Group not found or access denied")
+
+    # Получаем все колоды группы
+    group_decks = db.query(UserStudyGroupDeck).filter(
+        UserStudyGroupDeck.user_group_id == user_group.id
+    ).all()
+
+    result = []
+    for ugd in group_decks:
+        deck = db.query(Deck).filter(Deck.id == ugd.deck_id).first()
+        if not deck:
+            continue
+
+        # Получаем карточки колоды
+        cards = db.query(Card).filter(Card.deck_id == deck.id).all()
+        cards_summary = [
+            CardSummary(card_id=c.id, title=c.title, type=c.type)
+            for c in cards
+        ]
+
+        result.append(
+            DeckWithCards(
+                deck_id=deck.id,
+                title=deck.title,
+                cards=cards_summary
+            )
+        )
+
+    return result
