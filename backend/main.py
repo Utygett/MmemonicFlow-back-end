@@ -5,7 +5,7 @@ from datetime import datetime
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from backend.database import engine, Base, get_db
-from backend.models import Card
+from backend.models import CardModel
 from typing import List, Optional
 from enum import Enum
 import uuid
@@ -278,9 +278,34 @@ async def health_check():
 # Создаём таблицы
 Base.metadata.create_all(bind=engine)
 # Простой endpoint для проверки
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+
+from fastapi.responses import JSONResponse
+import json
+from fastapi.encoders import jsonable_encoder
+
+from fastapi.responses import Response
+import json
+from fastapi.encoders import jsonable_encoder
+
 @app.get("/api/cards")
-def get_cards(db: Session = Depends(get_db)):
-    return db.query(Card).all()
+def get_cards(skip: int = 0, limit: int = 100, deck_id: Optional[str] = None, db: Session = Depends(get_db)):
+    query = db.query(CardModel)
+    if deck_id:
+        query = query.filter(CardModel.deck_id == deck_id)
+    cards = query.offset(skip).limit(limit).all()
+
+    # ORM -> dict
+    cards_dict = jsonable_encoder(cards)
+
+    # JSON с корректной кириллицей
+    return Response(
+        content=json.dumps(cards_dict, ensure_ascii=False),
+        media_type="application/json; charset=utf-8"
+    )
+
+
 
 
 
