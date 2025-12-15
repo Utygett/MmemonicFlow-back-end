@@ -3,7 +3,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-
+from datetime import datetime, timezone
+from app.domain.review.entities import CardProgressState
+from app.models import CardProgress, Card
 from app.main import app
 from app.db.session import SessionLocal
 from app.models.card import Card
@@ -444,3 +446,193 @@ def test_cards_for_review_returns_active_level_content(user, card, progress, cli
     # 3. Проверяем, что content соответствует активному уровню
     card_data = next(c for c in data if c["card_id"] == str(card.id))
     assert card_data["content"] == {"question": "Q", "answer": "A"}
+
+@pytest.mark.parametrize(
+    "start_level,max_level,expected",
+    [
+        (0, 3, 1),
+        (2, 3, 3),
+        (3, 3, 3),  # не выше max_level
+    ]
+)
+def test_level_up(db: Session, start_level, max_level, expected):
+    # 1️⃣ Создаём пользователя
+    user = User(
+        id=uuid.uuid4(),
+        email=f"user_{uuid.uuid4()}@example.com",
+        username=f"user_{uuid.uuid4()}",
+        password_hash="hashed"
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    # 2️⃣ Создаём колоду
+    deck = Deck(
+        id=uuid.uuid4(),
+        title="Test Deck",
+        owner_id=user.id,
+        is_public=True
+    )
+    db.add(deck)
+    db.commit()
+    db.refresh(deck)
+
+    # 3️⃣ Создаём карточку
+    card = Card(
+        id=uuid.uuid4(),
+        deck_id=deck.id,
+        title="Card",
+        type="basic",
+        max_level=max_level
+    )
+    db.add(card)
+    db.commit()
+    db.refresh(card)
+
+    # 4️⃣ Создаём прогресс
+    progress = CardProgress(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        card_id=card.id,
+        active_level=start_level,
+        current_level=start_level
+    )
+    db.add(progress)
+    db.commit()
+    db.refresh(progress)
+
+    # 5️⃣ Поднимаем уровень
+    progress.increase_level(max_level=max_level)
+    db.commit()
+    db.refresh(progress)
+
+    assert progress.active_level == expected
+
+
+@pytest.mark.parametrize(
+    "start_level,expected",
+    [
+        (3, 2),
+        (1, 0),
+        (0, 0),  # не ниже 0
+    ]
+)
+def test_level_down(db: Session, start_level, expected):
+    # 1️⃣ Создаём пользователя
+    user = User(
+        id=uuid.uuid4(),
+        email=f"user_{uuid.uuid4()}@example.com",
+        username=f"user_{uuid.uuid4()}",
+        password_hash="hashed"
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    # 2️⃣ Создаём колоду
+    deck = Deck(
+        id=uuid.uuid4(),
+        title="Test Deck",
+        owner_id=user.id,
+        is_public=True
+    )
+    db.add(deck)
+    db.commit()
+    db.refresh(deck)
+
+    # 3️⃣ Создаём карточку
+    card = Card(
+        id=uuid.uuid4(),
+        deck_id=deck.id,
+        title="Card",
+        type="basic",
+        max_level=5
+    )
+    db.add(card)
+    db.commit()
+    db.refresh(card)
+
+    # 4️⃣ Создаём прогресс
+    progress = CardProgress(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        card_id=card.id,
+        active_level=start_level,
+        current_level=start_level
+    )
+    db.add(progress)
+    db.commit()
+    db.refresh(progress)
+
+    # 5️⃣ Опускаем уровень
+    progress.decrease_level()
+    db.commit()
+    db.refresh(progress)
+
+    assert progress.active_level == expected
+
+
+@pytest.mark.parametrize(
+    "start_level,max_level,expected",
+    [
+        (0, 3, 1),
+        (2, 3, 3),
+        (3, 3, 3),
+    ]
+)
+def test_api_level_up(db, client_with_db, card, user, start_level, max_level, expected):
+    # Проверяем или создаём прогресс
+    progress = db.query(CardProgress).filter_by(card_id=card.id, user_id=user.id).first()
+    if not progress:
+        progress = CardProgress(
+            card_id=card.id,
+            user_id=user.id,
+            current_level=start_level,
+            active_level=start_level,
+            streak=0,
+            next_review=datetime.now(timezone.utc)
+        )
+        db.add(progress)
+        db.commit()
+        db.refresh(progress)
+    else:
+        progress.active_level = start_level
+        card.max_level = max_level
+        db.commit()
+
+    response = client_with_db.post(f"/cards/{card.id}/level_up", params={"user_id": str(user.id)})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["active_level"] == expected
+
+@pytest.mark.parametrize(
+    "start_level,expected",
+    [
+        (3, 2),
+        (1, 0),
+        (0, 0),
+    ]
+)
+def test_api_level_down(db, client_with_db, card, user, start_level, expected):
+    progress = db.query(CardProgress).filter_by(card_id=card.id, user_id=user.id).first()
+    if not progress:
+        progress = CardProgress(
+            card_id=card.id,
+            user_id=user.id,
+            current_level=start_level,
+            active_level=start_level,
+            streak=0,
+            next_review=datetime.now(timezone.utc)
+        )
+        db.add(progress)
+        db.commit()
+        db.refresh(progress)
+    else:
+        progress.active_level = start_level
+        db.commit()
+
+    response = client_with_db.post(f"/cards/{card.id}/level_down", params={"user_id": str(user.id)})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["active_level"] == expected

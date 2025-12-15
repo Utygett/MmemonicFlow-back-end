@@ -222,3 +222,26 @@ def card_progress(card_id: str, db: Session = Depends(get_db)):
         "streak": progress.streak,
         "next_review": progress.next_review,
     }
+
+@router.post("/{card_id}/level_up")
+def level_up(card_id: str, user_id: str, db: Session = Depends(get_db)):
+    progress = db.query(CardProgress).filter_by(card_id=card_id, user_id=user_id).first()
+    if not progress:
+        raise HTTPException(404, "Progress not found")
+
+    card = db.get(Card, card_id)
+    progress.increase_level(max_level=card.max_level)
+    db.commit()
+    db.refresh(progress)
+    return {"active_level": progress.active_level}
+
+@router.post("/{card_id}/level_down")
+def level_down(card_id: str, user_id: str, db: Session = Depends(get_db)):
+    progress = db.query(CardProgress).filter_by(card_id=card_id, user_id=user_id).first()
+    if not progress:
+        raise HTTPException(404, "Progress not found")
+
+    progress.decrease_level()
+    db.commit()
+    db.refresh(progress)
+    return {"active_level": progress.active_level}

@@ -30,3 +30,11 @@ class CardProgress(Base):
 
     user: Mapped["User"] = relationship("User", back_populates="card_progress")
     card: Mapped["Card"] = relationship("Card", back_populates="progress")
+
+    def increase_level(self, max_level: int):
+        if self.active_level < max_level:
+            self.active_level += 1
+
+    def decrease_level(self):
+        if self.active_level > 0:
+            self.active_level -= 1
