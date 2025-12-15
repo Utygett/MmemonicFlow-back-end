@@ -6,7 +6,7 @@ from app.core.enums import ReviewRating
 
 class ReviewService:
     @staticmethod
-    def review(card, progress, rating: str) -> CardProgressState:
+    def review(progress, rating: str) -> CardProgressState:
         """
         Чистая domain-логика для обновления прогресса карточки.
         Возвращает новый объект CardProgressState, не взаимодействуя с БД.
@@ -27,10 +27,10 @@ class ReviewService:
         )
 
         # 3. Применяем рейтинг (уровни и стрик)
+        now = datetime.now(timezone.utc)
         state.apply_rating(
             rating=rating_enum,
-            max_level=card.max_level,
-            reviewed_at=datetime.now(timezone.utc)
+            reviewed_at=now
         )
 
         # 4. Рассчитываем next_review через ReviewPolicy
@@ -38,11 +38,8 @@ class ReviewService:
         next_review = policy.calculate_next_review(
             state=state,
             rating=rating_enum,
-            base_interval_minutes=progress.user.learning_settings.base_interval_minutes,
-            level_factor=progress.user.learning_settings.level_factor,
-            streak_factor=progress.user.learning_settings.streak_factor,
-            again_penalty=progress.user.learning_settings.again_penalty,
-            now=datetime.now(timezone.utc)
+            settings=progress.user.learning_settings,
+            now=now
         )
 
         # 5. Обновляем поле next_review

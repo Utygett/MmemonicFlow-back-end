@@ -87,7 +87,6 @@ def review_card(card_id: str, request: ReviewRequest, user_id: str, db: Session 
     # 4. Вызываем domain-сервис (чистый)
     from app.services.review_service import ReviewService
     updated_state = ReviewService.review(
-        card=card,
         progress=progress,
         rating=request.rating.value  # передаем строку
     )

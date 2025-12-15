@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta
 from app.core.enums import ReviewRating
+
+from .dto import LearningSettingsSnapshot
 from .entities import CardProgressState
 
 
@@ -19,29 +21,26 @@ class ReviewPolicy:
     }
 
     def calculate_next_review(
-        self,
-        *,
-        state: CardProgressState,
-        rating: ReviewRating,
-        base_interval_minutes: int,
-        level_factor: float,
-        streak_factor: float,
-        again_penalty: float,
-        now: datetime,
+            self,
+            *,
+            state: CardProgressState,
+            rating: ReviewRating,
+            settings: LearningSettingsSnapshot,
+            now: datetime,
     ) -> datetime:
         """
         Возвращает дату следующего повторения.
         """
 
         # 1. Базовый интервал
-        base_interval = timedelta(minutes=base_interval_minutes)
+        base_interval = timedelta(minutes=settings.base_interval_minutes)
 
         # 2. Множитель оценки
         rating_multiplier = self.RATING_MULTIPLIERS[rating]
 
         # 3. Влияние уровня и streak
-        level_multiplier = 1 + state.active_level * level_factor
-        streak_multiplier = 1 + state.streak * streak_factor
+        level_multiplier = 1 + state.active_level * settings.level_factor
+        streak_multiplier = 1 + state.streak * settings.streak_factor
 
         # 4. Интервал
         interval = (
@@ -53,6 +52,6 @@ class ReviewPolicy:
 
         # 5. Штраф при again
         if rating == ReviewRating.again:
-            interval *= again_penalty
+            interval *= settings.again_penalty
 
         return now + interval

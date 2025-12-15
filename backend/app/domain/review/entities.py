@@ -42,24 +42,32 @@ class CardProgressState:
     # ----------------
 
     def apply_rating(
-        self,
-        *,
-        rating: ReviewRating,
-        max_level: int,
-        reviewed_at: datetime,
+            self,
+            *,
+            rating: ReviewRating,
+            reviewed_at: datetime,
     ):
-        """
-        Применяет результат ответа пользователя к состоянию карточки.
-        """
-
         self.last_reviewed = reviewed_at
 
-        # 1. Стрик
         if rating == ReviewRating.again:
             self.streak = 0
             return
 
         self.streak += 1
 
-        # 3. Проверка инвариантов
-        self._validate(max_level=max_level)
+        self._validate()
+
+
+    def _validate(self):
+        if self.current_level < 0:
+            raise ValueError("current_level cannot be negative")
+
+        if self.active_level < 0:
+            raise ValueError("active_level cannot be negative")
+
+        if self.active_level > self.current_level:
+            raise ValueError("active_level cannot exceed current_level")
+
+        if self.streak < 0:
+            raise ValueError("streak cannot be negative")
+
