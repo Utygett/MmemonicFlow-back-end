@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.models.study_group import StudyGroup
 from sqlalchemy import text
 from app.models.user_study_group import UserStudyGroup
+from app.models import CardLevel
 
 # -----------------------------
 # DB session fixture
@@ -422,3 +423,24 @@ def test_group_filtered_decks(user, group, deck_in_group, deck_not_in_group, cli
 
     assert str(deck_in_group.id) in deck_ids
     assert str(deck_not_in_group.id) not in deck_ids
+
+def test_cards_for_review_returns_active_level_content(user, card, progress, client_with_db, db):
+    # 1. Создаём уровень для карточки
+    level = CardLevel(
+        card_id=card.id,
+        level_index=progress.active_level,
+        content={"question": "Q", "answer": "A"}
+    )
+    db.add(level)
+    db.commit()
+
+    # 2. Получаем карточки на ревью
+    response = client_with_db.get(f"/cards/review?user_id={user.id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert any(c["card_id"] == str(card.id) for c in data)
+
+    # 3. Проверяем, что content соответствует активному уровню
+    card_data = next(c for c in data if c["card_id"] == str(card.id))
+    assert card_data["content"] == {"question": "Q", "answer": "A"}

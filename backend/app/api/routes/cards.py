@@ -48,7 +48,15 @@ def get_cards_for_review(user_id: str, limit: int = 20, db: Session = Depends(ge
     result = []
     for progress in progress_list:
         card = db.get(Card, progress.card_id)
-        level_content = {}
+        level = (
+            db.query(CardLevel)
+            .filter(
+                CardLevel.card_id == card.id,
+                CardLevel.level_index == progress.active_level
+            )
+            .first()
+        )
+        level_content = level.content if level else {}
         result.append(
             CardForReview(
                 card_id=card.id,

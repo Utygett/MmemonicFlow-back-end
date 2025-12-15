@@ -1,7 +1,7 @@
 import uuid
 from sqlalchemy import Integer, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 class CardLevel(Base):
@@ -20,3 +20,5 @@ class CardLevel(Base):
 
     level_index: Mapped[int] = mapped_column(Integer)
     content: Mapped[dict] = mapped_column(JSONB)
+
+    card: Mapped["Card"] = relationship("Card", back_populates="levels")

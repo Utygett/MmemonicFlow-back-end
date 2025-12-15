@@ -45,3 +45,9 @@ class Card(Base):
         secondary=CardCardTag,
         back_populates="cards"
     )
+
+    levels = relationship(
+        "CardLevel",
+        back_populates="card",
+        cascade="all, delete-orphan"  # ← ключевой момент
+    )
