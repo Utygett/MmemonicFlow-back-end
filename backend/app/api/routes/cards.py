@@ -245,3 +245,148 @@ def level_down(card_id: str, user_id: str, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(progress)
     return {"active_level": progress.active_level}
+
+
+@router.post("/", response_model=CardSummary)
+def create_card(
+    deck_id: UUID,
+    title: str,
+    type: str,
+    max_level: int,
+    user_id: str,
+    db: Session = Depends(get_db),
+):
+    # проверяем, что колода доступна пользователю
+    deck = db.query(Deck).filter(
+        Deck.id == deck_id,
+        (Deck.owner_id == user_id) | (Deck.is_public == True)
+    ).first()
+    if not deck:
+        raise HTTPException(403, "Deck not accessible")
+
+    card = Card(
+        deck_id=deck_id,
+        title=title,
+        type=type,
+        max_level=max_level,
+    )
+    db.add(card)
+    db.commit()
+    db.refresh(card)
+
+    return CardSummary(
+        card_id=card.id,
+        title=card.title,
+        type=card.type,
+        levels=[]
+    )
+
+@router.delete("/{card_id}")
+def delete_card(card_id: UUID, user_id: str, db: Session = Depends(get_db)):
+    card = db.query(Card).join(Deck).filter(
+        Card.id == card_id,
+        Deck.owner_id == user_id
+    ).first()
+    if not card:
+        raise HTTPException(404, "Card not found")
+
+    db.delete(card)
+    db.commit()
+    return {"status": "ok"}
+
+@router.patch("/{card_id}", response_model=CardSummary)
+def update_card(
+    card_id: UUID,
+    title: Optional[str] = None,
+    type: Optional[str] = None,
+    max_level: Optional[int] = None,
+    user_id: str = "",
+    db: Session = Depends(get_db),
+):
+    card = db.query(Card).join(Deck).filter(
+        Card.id == card_id,
+        Deck.owner_id == user_id
+    ).first()
+    if not card:
+        raise HTTPException(404, "Card not found")
+
+    if title is not None:
+        card.title = title
+    if type is not None:
+        card.type = type
+    if max_level is not None:
+        card.max_level = max_level
+
+    db.commit()
+    db.refresh(card)
+
+    levels = db.query(CardLevel).filter(CardLevel.card_id == card.id).all()
+
+    return CardSummary(
+        card_id=card.id,
+        title=card.title,
+        type=card.type,
+        levels=[
+            CardLevelContent(level_index=l.level_index, content=l.content)
+            for l in levels
+        ]
+    )
+
+@router.put("/{card_id}/levels/{level_index}")
+def upsert_card_level(
+    card_id: UUID,
+    level_index: int,
+    content: dict,
+    user_id: str,
+    db: Session = Depends(get_db),
+):
+    card = db.query(Card).join(Deck).filter(
+        Card.id == card_id,
+        Deck.owner_id == user_id
+    ).first()
+    if not card:
+        raise HTTPException(404, "Card not found")
+
+    level = db.query(CardLevel).filter_by(
+        card_id=card_id,
+        level_index=level_index
+    ).first()
+
+    if level:
+        level.content = content
+    else:
+        level = CardLevel(
+            card_id=card_id,
+            level_index=level_index,
+            content=content
+        )
+        db.add(level)
+
+    db.commit()
+    return {"status": "ok"}
+
+@router.delete("/{card_id}/levels/{level_index}")
+def delete_card_level(
+    card_id: UUID,
+    level_index: int,
+    user_id: str,
+    db: Session = Depends(get_db),
+):
+    level = (
+        db.query(CardLevel)
+        .join(Card)
+        .join(Deck)
+        .filter(
+            CardLevel.card_id == card_id,
+            CardLevel.level_index == level_index,
+            Deck.owner_id == user_id
+        )
+        .first()
+    )
+
+    if not level:
+        raise HTTPException(404, "Level not found")
+
+    db.delete(level)
+    db.commit()
+    return {"status": "ok"}

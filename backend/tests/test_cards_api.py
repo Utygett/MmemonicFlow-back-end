@@ -139,7 +139,7 @@ def user_settings(db, user):
 def other_user(db: Session):
     u = User(
         id=str(uuid.uuid4()),
-        email="other@example.com",
+        email=f"test_{uuid.uuid4()}@example.com",
         username="user2",
         password_hash="hashed_password"
     )
@@ -636,3 +636,134 @@ def test_api_level_down(db, client_with_db, card, user, start_level, expected):
     assert response.status_code == 200
     data = response.json()
     assert data["active_level"] == expected
+
+def test_create_card(deck, user, client_with_db):
+    response = client_with_db.post(
+        "/cards/",
+        params={
+            "deck_id": deck.id,
+            "title": "New Card",
+            "type": "basic",
+            "max_level": 3,
+            "user_id": user.id
+        }
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["title"] == "New Card"
+    assert data["type"] == "basic"
+    assert data["levels"] == []
+
+def test_create_card_forbidden(other_deck, user, client_with_db):
+    response = client_with_db.post(
+        "/cards/",
+        params={
+            "deck_id": other_deck.id,
+            "title": "Hack Card",
+            "type": "basic",
+            "max_level": 3,
+            "user_id": user.id
+        }
+    )
+
+    assert response.status_code == 403
+
+def test_update_card(card, user, client_with_db):
+    response = client_with_db.patch(
+        f"/cards/{card.id}",
+        params={
+            "title": "Updated Title",
+            "max_level": 10,
+            "user_id": user.id
+        }
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["title"] == "Updated Title"
+
+def test_update_card_not_owner(card, other_user, client_with_db):
+    response = client_with_db.patch(
+        f"/cards/{card.id}",
+        params={
+            "title": "Hack",
+            "user_id": other_user.id
+        }
+    )
+
+    assert response.status_code == 404
+
+def test_delete_card(card, user, client_with_db, db):
+    response = client_with_db.delete(
+        f"/cards/{card.id}",
+        params={"user_id": user.id}
+    )
+
+    assert response.status_code == 200
+
+    deleted = db.query(Card).filter(Card.id == card.id).first()
+    assert deleted is None
+
+def test_create_card_level(card, user, client_with_db, db):
+    response = client_with_db.put(
+        f"/cards/{card.id}/levels/0",
+        params={"user_id": user.id},
+        json={"question": "Q1", "answer": "A1"}
+    )
+
+    assert response.status_code == 200
+
+    level = db.query(CardLevel).filter_by(card_id=card.id, level_index=0).first()
+    assert level is not None
+    assert level.content["question"] == "Q1"
+
+def test_update_card_level(card, user, client_with_db, db):
+    # создаём уровень
+    level = CardLevel(
+        card_id=card.id,
+        level_index=1,
+        content={"question": "Old"}
+    )
+    db.add(level)
+    db.commit()
+
+    response = client_with_db.put(
+        f"/cards/{card.id}/levels/1",
+        params={"user_id": user.id},
+        json={"question": "New"}
+    )
+
+    assert response.status_code == 200
+
+    db.refresh(level)
+    assert level.content["question"] == "New"
+
+def test_delete_card_level(card, user, client_with_db, db):
+    level = CardLevel(
+        card_id=card.id,
+        level_index=2,
+        content={"q": "Q"}
+    )
+    db.add(level)
+    db.commit()
+
+    response = client_with_db.delete(
+        f"/cards/{card.id}/levels/2",
+        params={"user_id": user.id}
+    )
+
+    assert response.status_code == 200
+
+    deleted = db.query(CardLevel).filter_by(card_id=card.id, level_index=2).first()
+    assert deleted is None
+
+def test_delete_card_level_not_found(card, user, client_with_db):
+    response = client_with_db.delete(
+        f"/cards/{card.id}/levels/999",
+        params={"user_id": user.id}
+    )
+
+    assert response.status_code == 404
