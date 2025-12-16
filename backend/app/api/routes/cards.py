@@ -19,7 +19,7 @@ from app.models.card_review_history import CardReviewHistory
 from app.models import Deck
 from app.models.card_level import CardLevel
 from app.schemas.cards import DeckWithCards, CardSummary, CardLevelContent
-
+from app.auth.dependencies import get_current_user_id
 
 router = APIRouter()
 
@@ -35,7 +35,7 @@ def get_db():
 # Получение карточек для повторения
 # -------------------------------
 @router.get("/review", response_model=List[CardForReview])
-def get_cards_for_review(user_id: str, limit: int = 20, db: Session = Depends(get_db)):
+def get_cards_for_review(user_id: str = Depends(get_current_user_id), limit: int = 20, db: Session = Depends(get_db)):
     progress_list = (
         db.query(CardProgress)
         .filter(CardProgress.user_id == user_id)
@@ -76,7 +76,7 @@ def get_cards_for_review(user_id: str, limit: int = 20, db: Session = Depends(ge
 # Отправка рейтинга после повторения
 # -------------------------------
 @router.post("/{card_id}/review", response_model=ReviewResponse)
-def review_card(card_id: str, request: ReviewRequest, user_id: str, db: Session = Depends(get_db)):
+def review_card(card_id: str, request: ReviewRequest, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
     # 1. Получаем текущий прогресс
     progress = db.query(CardProgress).filter_by(card_id=card_id, user_id=user_id).first()
     if not progress:
@@ -137,7 +137,7 @@ def review_card(card_id: str, request: ReviewRequest, user_id: str, db: Session 
 # -------------------------------
 @router.get("/", response_model=List[DeckWithCards])
 def list_decks_with_cards(
-    user_id: str,
+    user_id: str = Depends(get_current_user_id),
     deck_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db)
 ):
@@ -207,24 +207,8 @@ def list_decks_with_cards(
 
     return result
 
-# -------------------------------
-# Прогресс конкретной карточки
-# -------------------------------
-@router.get("/{card_id}/progress")
-def card_progress(card_id: str, db: Session = Depends(get_db)):
-    progress = db.query(CardProgress).filter(CardProgress.card_id == card_id).first()
-    if not progress:
-        raise HTTPException(status_code=404, detail="Progress not found")
-
-    return {
-        "card_id": str(progress.card_id),
-        "current_level": progress.current_level,
-        "streak": progress.streak,
-        "next_review": progress.next_review,
-    }
-
 @router.post("/{card_id}/level_up")
-def level_up(card_id: str, user_id: str, db: Session = Depends(get_db)):
+def level_up(card_id: str, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
     progress = db.query(CardProgress).filter_by(card_id=card_id, user_id=user_id).first()
     if not progress:
         raise HTTPException(404, "Progress not found")
@@ -236,7 +220,7 @@ def level_up(card_id: str, user_id: str, db: Session = Depends(get_db)):
     return {"active_level": progress.active_level}
 
 @router.post("/{card_id}/level_down")
-def level_down(card_id: str, user_id: str, db: Session = Depends(get_db)):
+def level_down(card_id: str, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
     progress = db.query(CardProgress).filter_by(card_id=card_id, user_id=user_id).first()
     if not progress:
         raise HTTPException(404, "Progress not found")
@@ -253,7 +237,7 @@ def create_card(
     title: str,
     type: str,
     max_level: int,
-    user_id: str,
+    user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     # проверяем, что колода доступна пользователю
@@ -282,7 +266,7 @@ def create_card(
     )
 
 @router.delete("/{card_id}")
-def delete_card(card_id: UUID, user_id: str, db: Session = Depends(get_db)):
+def delete_card(card_id: UUID, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
     card = db.query(Card).join(Deck).filter(
         Card.id == card_id,
         Deck.owner_id == user_id
@@ -300,7 +284,7 @@ def update_card(
     title: Optional[str] = None,
     type: Optional[str] = None,
     max_level: Optional[int] = None,
-    user_id: str = "",
+    user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     card = db.query(Card).join(Deck).filter(
@@ -337,7 +321,7 @@ def upsert_card_level(
     card_id: UUID,
     level_index: int,
     content: dict,
-    user_id: str,
+    user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     card = db.query(Card).join(Deck).filter(
@@ -369,7 +353,7 @@ def upsert_card_level(
 def delete_card_level(
     card_id: UUID,
     level_index: int,
-    user_id: str,
+    user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     level = (

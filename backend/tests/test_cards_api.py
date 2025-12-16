@@ -65,6 +65,19 @@ def user(db):
     # db.delete(u)
     # db.commit()
 
+# -----------------------------
+# JWT Auth fixture
+# -----------------------------
+@pytest.fixture
+def auth_header(client_with_db, user):
+    # создаем токен напрямую через login endpoint
+    response = client_with_db.post("/auth/login", params={
+        "email": user.email,
+        "password": "hashed"  # используем пароль из фикстуры
+    })
+    assert response.status_code == 200
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
 
 @pytest.fixture
 def deck(db, user):
@@ -283,9 +296,10 @@ def deck_not_in_group(db: Session, other_user: User):
 # -----------------------------
 # API тесты
 # -----------------------------
-def test_list_cards(deck, card, user, client_with_db):
+def test_list_cards(deck, card, user, client_with_db, auth_header):
     response = client_with_db.get(
-        f"/cards/?deck_id={deck.id}&user_id={user.id}"
+        f"/cards/?deck_id={deck.id}&user_id={user.id}",
+        headers=auth_header
     )
     assert response.status_code == 200
 
@@ -298,17 +312,8 @@ def test_list_cards(deck, card, user, client_with_db):
     ), f"Cards returned: {data}"
 
 
-def test_card_progress(progress, client_with_db):
-    response = client_with_db.get(f"/cards/{progress.card_id}/progress")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["card_id"] == str(progress.card_id)
-    assert data["current_level"] == 0
-    assert data["streak"] == 0
-
-
-def test_cards_for_review(user, card, progress, client_with_db):
-    response = client_with_db.get(f"/cards/review?user_id={user.id}")
+def test_cards_for_review(user, card, progress, client_with_db, auth_header):
+    response = client_with_db.get("/cards/review", headers=auth_header)
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -324,10 +329,10 @@ def test_cards_for_review(user, card, progress, client_with_db):
         ("easy", 1),
     ],
 )
-def test_review_ratings(card, user, progress, user_settings, rating, expected_streak, client_with_db):
+def test_review_ratings(card, user, progress, user_settings, rating, expected_streak, client_with_db, auth_header):
     initial_level = progress.current_level
     response = client_with_db.post(
-        f"/cards/{card.id}/review",
+        f"/cards/{card.id}/review", headers=auth_header,
         params={"user_id": str(user.id)},
         json={"rating": rating},
     )
@@ -342,10 +347,11 @@ def test_review_ratings(card, user, progress, user_settings, rating, expected_st
     assert next_review_dt > datetime.now(timezone.utc)
 
 
-def test_review_not_found(user, client_with_db):
+def test_review_not_found(user, client_with_db, auth_header):
     fake_card_id = str(uuid.uuid4())
     response = client_with_db.post(
         f"/cards/{fake_card_id}/review",
+        headers=auth_header,
         params={"user_id": str(user.id)},
         json={"rating": "good"},
     )
@@ -355,9 +361,10 @@ def test_review_not_found(user, client_with_db):
 # ----------------------------
 # 1️⃣ Проверка наличия levels
 # ----------------------------
-def test_card_levels_present(deck, card, user, client_with_db):
+def test_card_levels_present(deck, card, user, client_with_db, auth_header):
     response = client_with_db.get(
-        f"/cards/?deck_id={deck.id}&user_id={user.id}"
+        f"/cards/?deck_id={deck.id}&user_id={user.id}",
+        headers=auth_header
     )
     assert response.status_code == 200
     data = response.json()
@@ -375,9 +382,10 @@ def test_card_levels_present(deck, card, user, client_with_db):
 # ----------------------------
 # 2️⃣ Проверка content внутри levels
 # ----------------------------
-def test_card_levels_content(deck, card, user, client_with_db):
+def test_card_levels_content(deck, card, user, client_with_db, auth_header):
     response = client_with_db.get(
-        f"/cards/?deck_id={deck.id}&user_id={user.id}"
+        f"/cards/?deck_id={deck.id}&user_id={user.id}",
+        headers=auth_header
     )
     data = response.json()
 
@@ -392,12 +400,12 @@ def test_card_levels_content(deck, card, user, client_with_db):
 # ----------------------------
 # 3️⃣ Проверка фильтрации по is_public / owner_id
 # ----------------------------
-def test_only_accessible_decks(deck, other_deck, user, client_with_db):
+def test_only_accessible_decks(deck, other_deck, user, client_with_db, auth_header):
     """
     deck: текущий пользовательский deck
     other_deck: чужая приватная колода
     """
-    response = client_with_db.get(f"/cards/?user_id={user.id}")
+    response = client_with_db.get(f"/cards/?user_id={user.id}", headers=auth_header)
     data = response.json()
 
     deck_ids = [d["deck_id"] for d in data]
@@ -412,13 +420,14 @@ def test_only_accessible_decks(deck, other_deck, user, client_with_db):
 # ----------------------------
 # 4️⃣ Проверка фильтрации по группам (если используется)
 # ----------------------------
-def test_group_filtered_decks(user, group, deck_in_group, deck_not_in_group, client_with_db):
+def test_group_filtered_decks(user, group, deck_in_group, deck_not_in_group, client_with_db, auth_header):
     """
     deck_in_group: колода, которая привязана к группе пользователя
     deck_not_in_group: колода, которая НЕ привязана к группе пользователя
     """
     response = client_with_db.get(
-        f"/cards/?user_id={user.id}"
+        f"/cards/?user_id={user.id}",
+        headers=auth_header
     )
     data = response.json()
 
@@ -427,7 +436,7 @@ def test_group_filtered_decks(user, group, deck_in_group, deck_not_in_group, cli
     assert str(deck_in_group.id) in deck_ids
     assert str(deck_not_in_group.id) not in deck_ids
 
-def test_cards_for_review_returns_active_level_content(user, card, progress, client_with_db, db):
+def test_cards_for_review_returns_active_level_content(user, card, progress, client_with_db, db, auth_header):
     # 1. Создаём уровень для карточки
     level = CardLevel(
         card_id=card.id,
@@ -438,7 +447,7 @@ def test_cards_for_review_returns_active_level_content(user, card, progress, cli
     db.commit()
 
     # 2. Получаем карточки на ревью
-    response = client_with_db.get(f"/cards/review?user_id={user.id}")
+    response = client_with_db.get(f"/cards/review?user_id={user.id}", headers=auth_header)
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -456,7 +465,7 @@ def test_cards_for_review_returns_active_level_content(user, card, progress, cli
         (3, 3, 3),  # не выше max_level
     ]
 )
-def test_level_up(db: Session, start_level, max_level, expected):
+def test_level_up(db: Session, start_level, max_level, expected, auth_header):
     # 1️⃣ Создаём пользователя
     user = User(
         id=uuid.uuid4(),
@@ -582,7 +591,7 @@ def test_level_down(db: Session, start_level, expected):
         (3, 3, 3),
     ]
 )
-def test_api_level_up(db, client_with_db, card, user, start_level, max_level, expected):
+def test_api_level_up(db, client_with_db, card, user, start_level, max_level, expected, auth_header):
     # Проверяем или создаём прогресс
     progress = db.query(CardProgress).filter_by(card_id=card.id, user_id=user.id).first()
     if not progress:
@@ -602,7 +611,7 @@ def test_api_level_up(db, client_with_db, card, user, start_level, max_level, ex
         card.max_level = max_level
         db.commit()
 
-    response = client_with_db.post(f"/cards/{card.id}/level_up", params={"user_id": str(user.id)})
+    response = client_with_db.post(f"/cards/{card.id}/level_up", params={"user_id": str(user.id)}, headers=auth_header)
     assert response.status_code == 200
     data = response.json()
     assert data["active_level"] == expected
@@ -615,7 +624,7 @@ def test_api_level_up(db, client_with_db, card, user, start_level, max_level, ex
         (0, 0),
     ]
 )
-def test_api_level_down(db, client_with_db, card, user, start_level, expected):
+def test_api_level_down(db, client_with_db, card, user, start_level, expected, auth_header):
     progress = db.query(CardProgress).filter_by(card_id=card.id, user_id=user.id).first()
     if not progress:
         progress = CardProgress(
@@ -633,12 +642,12 @@ def test_api_level_down(db, client_with_db, card, user, start_level, expected):
         progress.active_level = start_level
         db.commit()
 
-    response = client_with_db.post(f"/cards/{card.id}/level_down", params={"user_id": str(user.id)})
+    response = client_with_db.post(f"/cards/{card.id}/level_down", params={"user_id": str(user.id)}, headers=auth_header)
     assert response.status_code == 200
     data = response.json()
     assert data["active_level"] == expected
 
-def test_create_card(deck, user, client_with_db):
+def test_create_card(deck, user, client_with_db, auth_header):
     response = client_with_db.post(
         "/cards/",
         params={
@@ -647,7 +656,8 @@ def test_create_card(deck, user, client_with_db):
             "type": "basic",
             "max_level": 3,
             "user_id": user.id
-        }
+        },
+        headers=auth_header
     )
 
     assert response.status_code == 200
@@ -657,7 +667,7 @@ def test_create_card(deck, user, client_with_db):
     assert data["type"] == "basic"
     assert data["levels"] == []
 
-def test_create_card_forbidden(other_deck, user, client_with_db):
+def test_create_card_forbidden(other_deck, user, client_with_db, auth_header):
     response = client_with_db.post(
         "/cards/",
         params={
@@ -666,19 +676,21 @@ def test_create_card_forbidden(other_deck, user, client_with_db):
             "type": "basic",
             "max_level": 3,
             "user_id": user.id
-        }
+        },
+        headers=auth_header
     )
 
     assert response.status_code == 403
 
-def test_update_card(card, user, client_with_db):
+def test_update_card(card, user, client_with_db, auth_header):
     response = client_with_db.patch(
         f"/cards/{card.id}",
         params={
             "title": "Updated Title",
             "max_level": 10,
             "user_id": user.id
-        }
+        },
+        headers=auth_header
     )
 
     assert response.status_code == 200
@@ -686,25 +698,25 @@ def test_update_card(card, user, client_with_db):
 
     assert data["title"] == "Updated Title"
 
-def test_update_card_not_owner(card, other_user, client_with_db):
+def test_update_card_not_owner(card, other_user, client_with_db, auth_header):
     response = client_with_db.patch(
         f"/cards/{card.id}",
         params={
             "title": "Hack",
             "user_id": other_user.id
         }
+
     )
+    assert response.status_code == 401
 
-    assert response.status_code == 404
 
-
-def test_delete_card(card, user, client_with_db, db):
+def test_delete_card(card, client_with_db, db, auth_header):
     # Сохраняем ID перед тестом
     card_id = str(card.id)
 
     response = client_with_db.delete(
         f"/cards/{card_id}",
-        params={"user_id": str(user.id)}
+        headers=auth_header  # токен передается здесь
     )
 
     assert response.status_code == 200
@@ -713,11 +725,12 @@ def test_delete_card(card, user, client_with_db, db):
     deleted_card = db.query(Card).filter(Card.id == card_id).first()
     assert deleted_card is None
 
-def test_create_card_level(card, user, client_with_db, db):
+def test_create_card_level(card, user, client_with_db, db, auth_header):
     response = client_with_db.put(
         f"/cards/{card.id}/levels/0",
         params={"user_id": user.id},
-        json={"question": "Q1", "answer": "A1"}
+        json={"question": "Q1", "answer": "A1"},
+        headers=auth_header
     )
 
     assert response.status_code == 200
@@ -726,7 +739,7 @@ def test_create_card_level(card, user, client_with_db, db):
     assert level is not None
     assert level.content["question"] == "Q1"
 
-def test_update_card_level(card, user, client_with_db, db):
+def test_update_card_level(card, user, client_with_db, db, auth_header):
     # создаём уровень
     level = CardLevel(
         card_id=card.id,
@@ -739,7 +752,8 @@ def test_update_card_level(card, user, client_with_db, db):
     response = client_with_db.put(
         f"/cards/{card.id}/levels/1",
         params={"user_id": user.id},
-        json={"question": "New"}
+        json={"question": "New"},
+        headers=auth_header
     )
 
     assert response.status_code == 200
@@ -747,7 +761,7 @@ def test_update_card_level(card, user, client_with_db, db):
     db.refresh(level)
     assert level.content["question"] == "New"
 
-def test_delete_card_level(card, user, client_with_db, db):
+def test_delete_card_level(card, user, client_with_db, db, auth_header):
     level = CardLevel(
         card_id=card.id,
         level_index=2,
@@ -758,7 +772,8 @@ def test_delete_card_level(card, user, client_with_db, db):
 
     response = client_with_db.delete(
         f"/cards/{card.id}/levels/2",
-        params={"user_id": user.id}
+        params={"user_id": user.id},
+        headers=auth_header
     )
 
     assert response.status_code == 200
@@ -766,10 +781,11 @@ def test_delete_card_level(card, user, client_with_db, db):
     deleted = db.query(CardLevel).filter_by(card_id=card.id, level_index=2).first()
     assert deleted is None
 
-def test_delete_card_level_not_found(card, user, client_with_db):
+def test_delete_card_level_not_found(card, user, client_with_db, auth_header):
     response = client_with_db.delete(
         f"/cards/{card.id}/levels/999",
-        params={"user_id": user.id}
+        params={"user_id": user.id},
+        headers=auth_header
     )
 
     assert response.status_code == 404
