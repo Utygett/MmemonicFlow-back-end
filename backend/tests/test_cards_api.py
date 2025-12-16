@@ -32,6 +32,7 @@ def db():
     db = SessionLocal()
     try:
         yield db
+        db.rollback()
     finally:
         db.close()
 
@@ -61,8 +62,8 @@ def user(db):
     db.commit()
     db.refresh(u)
     yield u
-    db.delete(u)
-    db.commit()
+    # db.delete(u)
+    # db.commit()
 
 
 @pytest.fixture
@@ -78,8 +79,8 @@ def deck(db, user):
     db.commit()
     db.refresh(d)
     yield d
-    db.delete(d)
-    db.commit()
+    # db.delete(d)
+    # db.commit()
 
 
 @pytest.fixture
@@ -95,8 +96,8 @@ def card(db, deck):
     db.commit()
     db.refresh(c)
     yield c
-    db.delete(c)
-    db.commit()
+    # db.delete(c)
+    # db.commit()
 
 
 @pytest.fixture
@@ -113,8 +114,8 @@ def progress(db, card, user):
     db.commit()
     db.refresh(p)
     yield p
-    db.delete(p)
-    db.commit()
+    # db.delete(p)
+    # db.commit()
 
 
 @pytest.fixture
@@ -130,8 +131,8 @@ def user_settings(db, user):
     db.commit()
     db.refresh(s)
     yield s
-    db.delete(s)
-    db.commit()
+    # db.delete(s)
+    # db.commit()
 
 # --- пользователи ---
 
@@ -147,8 +148,8 @@ def other_user(db: Session):
     db.commit()
     db.refresh(u)
     yield u
-    db.delete(u)
-    db.commit()
+    # db.delete(u)
+    # db.commit()
 
 # --- колоды ---
 @pytest.fixture
@@ -163,8 +164,8 @@ def deck(db: Session, user: User):
     db.commit()
     db.refresh(d)
     yield d
-    db.delete(d)
-    db.commit()
+    # db.delete(d)
+    # db.commit()
 
 @pytest.fixture
 def other_deck(db: Session, other_user: User):
@@ -172,14 +173,14 @@ def other_deck(db: Session, other_user: User):
         id=str(uuid.uuid4()),
         title="Deck 2",
         owner_id=other_user.id,
-        is_public=True
+        is_public=False
     )
     db.add(d)
     db.commit()
     db.refresh(d)
     yield d
-    db.delete(d)
-    db.commit()
+    # db.delete(d)
+    # db.commit()
 
 # --- карточки ---
 @pytest.fixture
@@ -195,8 +196,8 @@ def card(db: Session, deck: Deck):
     db.commit()
     db.refresh(c)
     yield c
-    db.delete(c)
-    db.commit()
+    # db.delete(c)
+    # db.commit()
 
 @pytest.fixture
 def group(db: Session, user: User):
@@ -209,8 +210,8 @@ def group(db: Session, user: User):
     db.commit()
     db.refresh(g)
     yield g
-    db.delete(g)
-    db.commit()
+    # db.delete(g)
+    # db.commit()
 
 @pytest.fixture
 def user_group(db: Session, user):
@@ -225,8 +226,8 @@ def user_group(db: Session, user):
     db.commit()
     db.refresh(group)
     yield group
-    db.delete(group)
-    db.commit()
+    # db.delete(group)
+    # db.commit()
 
 @pytest.fixture
 def deck_in_group(db: Session, user_group: UserStudyGroup, user: User):
@@ -259,8 +260,8 @@ def deck_in_group(db: Session, user_group: UserStudyGroup, user: User):
         ),
         {"user_group_id": user_group.id, "deck_id": d.id}
     )
-    db.delete(d)
-    db.commit()
+    # db.delete(d)
+    # db.commit()
 
 
 @pytest.fixture
@@ -275,8 +276,8 @@ def deck_not_in_group(db: Session, other_user: User):
     db.commit()
     db.refresh(d)
     yield d
-    db.delete(d)
-    db.commit()
+    # db.delete(d)
+    # db.commit()
 
 
 # -----------------------------
@@ -696,16 +697,21 @@ def test_update_card_not_owner(card, other_user, client_with_db):
 
     assert response.status_code == 404
 
+
 def test_delete_card(card, user, client_with_db, db):
+    # Сохраняем ID перед тестом
+    card_id = str(card.id)
+
     response = client_with_db.delete(
-        f"/cards/{card.id}",
-        params={"user_id": user.id}
+        f"/cards/{card_id}",
+        params={"user_id": str(user.id)}
     )
 
     assert response.status_code == 200
 
-    deleted = db.query(Card).filter(Card.id == card.id).first()
-    assert deleted is None
+    # Проверяем, что карточка действительно удалена
+    deleted_card = db.query(Card).filter(Card.id == card_id).first()
+    assert deleted_card is None
 
 def test_create_card_level(card, user, client_with_db, db):
     response = client_with_db.put(
