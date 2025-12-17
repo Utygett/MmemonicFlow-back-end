@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from uuid import UUID
 
 class LoginRequest(BaseModel):
@@ -20,5 +20,4 @@ class UserResponse(BaseModel):
     email: EmailStr
     username: str
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)

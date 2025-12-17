@@ -16,3 +16,7 @@ class DeckWithCards(BaseModel):
     deck_id: UUID
     title: str
     cards: List[CardSummary]
+
+class DeckSummary(BaseModel):
+    deck_id: UUID
+    title: str

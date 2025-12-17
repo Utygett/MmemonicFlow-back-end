@@ -26,6 +26,8 @@ from app.models import CardLevel
 
 from app.core.security import hash_password
 
+from app.models import UserStudyGroupDeck
+
 
 # -----------------------------
 # DB session fixture
@@ -780,4 +782,132 @@ def test_delete_card_level_not_found(card, user, client_with_db, auth_header):
         headers=auth_header
     )
 
+    assert response.status_code == 404
+
+
+# -----------------------------
+# Фикстуры для колод
+# -----------------------------
+@pytest.fixture
+def user_group_with_deck(db: Session, user: User):
+    # 1️⃣ Создаем группу пользователя
+    group = UserStudyGroup(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        title_override="Test Group"
+    )
+    db.add(group)
+    db.commit()
+    db.refresh(group)
+
+    # 2️⃣ Создаем колоду пользователя
+    deck = Deck(
+        id=uuid.uuid4(),
+        title="User Deck",
+        owner_id=user.id,
+        is_public=True
+    )
+    db.add(deck)
+    db.commit()
+    db.refresh(deck)
+
+    # 3️⃣ Создаем связь UserStudyGroupDeck
+    ugd = UserStudyGroupDeck(
+        user_group_id=group.id,
+        deck_id=deck.id,
+        order_index=0
+    )
+    db.add(ugd)
+    db.commit()
+
+    yield group, deck
+
+
+@pytest.fixture
+def other_user_deck(db: Session, other_user: User):
+    # Колода другого пользователя (не связана с группой текущего пользователя)
+    deck = Deck(
+        id=uuid.uuid4(),
+        title="Other User Deck",
+        owner_id=other_user.id,
+        is_public=False
+    )
+    db.add(deck)
+    db.commit()
+    db.refresh(deck)
+    yield deck
+
+
+# -----------------------------
+# Фикстуры для карточек
+# -----------------------------
+@pytest.fixture
+def deck_card(db: Session, user_group_with_deck):
+    _, deck = user_group_with_deck
+    c = Card(
+        id=uuid.uuid4(),
+        deck_id=deck.id,
+        title="Deck Card",
+        type="basic",
+        max_level=3
+    )
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    yield c
+
+
+@pytest.fixture
+def deck_card_levels(db: Session, deck_card: Card):
+    from app.models.card_level import CardLevel
+    level = CardLevel(
+        card_id=deck_card.id,
+        level_index=0,
+        content={"question": "Q", "answer": "A"}
+    )
+    db.add(level)
+    db.commit()
+    db.refresh(level)
+    yield level
+
+
+# -----------------------------
+# Тесты
+# -----------------------------
+def test_list_user_decks(client_with_db, auth_header, user_group_with_deck, other_user_deck):
+    _, user_deck = user_group_with_deck
+
+    response = client_with_db.get("/decks", headers=auth_header)
+    assert response.status_code == 200
+
+    data = response.json()
+    deck_ids = [d["deck_id"] for d in data]
+
+    # Пользователь видит свою колоду
+    assert str(user_deck.id) in deck_ids
+    # Пользователь не видит чужую приватную колоду
+    assert str(other_user_deck.id) not in deck_ids
+
+
+def test_list_deck_cards(client_with_db, auth_header, user_group_with_deck, deck_card, deck_card_levels):
+    _, user_deck = user_group_with_deck
+
+    response = client_with_db.get(f"/decks/{user_deck.id}/cards", headers=auth_header)
+    assert response.status_code == 200
+
+    data = response.json()
+    assert isinstance(data, list)
+    # Проверяем, что карточка вернулась
+    assert any(c["card_id"] == str(deck_card.id) for c in data)
+
+    # Проверяем, что уровни карточки возвращаются
+    card_data = next(c for c in data if c["card_id"] == str(deck_card.id))
+    assert "levels" in card_data
+    assert isinstance(card_data["levels"], list)
+    assert card_data["levels"][0]["content"] == {"question": "Q", "answer": "A"}
+
+
+def test_list_deck_cards_access_denied(client_with_db, auth_header, other_user_deck):
+    response = client_with_db.get(f"/decks/{other_user_deck.id}/cards", headers=auth_header)
+    # Доступ к чужой приватной колоде запрещен
     assert response.status_code == 404
