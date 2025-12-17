@@ -6,14 +6,16 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.user import User
 from datetime import datetime, timedelta, timezone
-from jose import jwt
 from app.core.config import settings
 from app.core.security import verify_password
 from app.schemas.auth import LoginRequest, TokenResponse
 from app.core.security import verify_password
 from app.core.security import hash_password
-
+from fastapi import Depends
+from jose import JWTError, jwt
 from app.schemas.auth import RegisterRequest
+from app.core.security import get_current_user
+from app.schemas.auth import UserResponse
 
 router = APIRouter(tags=["auth"])
 
@@ -24,6 +26,13 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+@router.get("/me", response_model=UserResponse)
+def me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+
 
 
 @router.post("/register", response_model=TokenResponse)

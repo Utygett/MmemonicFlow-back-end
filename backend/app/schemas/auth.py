@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field
-
+from uuid import UUID
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -14,3 +14,11 @@ class RegisterRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+class UserResponse(BaseModel):
+    id: UUID
+    email: EmailStr
+    username: str
+
+    class Config:
+        orm_mode = True
