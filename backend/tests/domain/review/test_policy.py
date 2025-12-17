@@ -4,7 +4,7 @@ from app.domain.review.entities import CardProgressState
 from app.domain.review.policy import ReviewPolicy
 from app.core.enums import ReviewRating
 
-from backend.app.domain.review.dto import LearningSettingsSnapshot
+from app.domain.review.dto import LearningSettingsSnapshot
 
 settings = LearningSettingsSnapshot(
         base_interval_minutes=60,

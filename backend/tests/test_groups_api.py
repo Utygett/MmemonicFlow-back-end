@@ -53,16 +53,27 @@ def user(db):
     db.delete(u)
     db.commit()
 
+@pytest.fixture
+def auth_header(client_with_db, user):
+    # создаем токен напрямую через login endpoint
+    response = client_with_db.post("/auth/login", params={
+        "email": user.email,
+        "password": "hashed"  # используем пароль из фикстуры
+    })
+    assert response.status_code == 200
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
 
 # -----------------------------
 # Тесты CRUD групп
 # -----------------------------
-def test_create_get_update_delete_group(client_with_db, db, user):
+def test_create_get_update_delete_group(client_with_db, db, user, auth_header):
     # --- Create ---
     response = client_with_db.post(
         "/groups/",
         params={"user_id": str(user.id)},
         json={"title": "Тестовая группа", "description": "Описание группы"},
+        headers=auth_header
     )
     assert response.status_code == 200
     data = response.json()
@@ -70,13 +81,15 @@ def test_create_get_update_delete_group(client_with_db, db, user):
     assert data["title"] == "Тестовая группа"
 
     # --- Get list ---
-    response = client_with_db.get("/groups/", params={"user_id": str(user.id)})
+    response = client_with_db.get("/groups/", params={"user_id": str(user.id)}, headers=auth_header)
+    assert response.status_code == 200
     assert response.status_code == 200
     groups = response.json()
     assert any(g["id"] == group_id for g in groups)
 
     # --- Get specific ---
-    response = client_with_db.get(f"/groups/{group_id}", params={"user_id": str(user.id)})
+    response = client_with_db.get(f"/groups/{group_id}", params={"user_id": str(user.id)}, headers=auth_header)
+    assert response.status_code == 200
     assert response.status_code == 200
     group_data = response.json()
     assert group_data["title"] == "Тестовая группа"
@@ -86,13 +99,14 @@ def test_create_get_update_delete_group(client_with_db, db, user):
         f"/groups/{group_id}",
         params={"user_id": str(user.id)},
         json={"title": "Новая группа"},
+        headers=auth_header
     )
     assert response.status_code == 200
     updated = response.json()
     assert updated["title"] == "Новая группа"
 
     # --- Delete ---
-    response = client_with_db.delete(f"/groups/{group_id}", params={"user_id": str(user.id)})
+    response = client_with_db.delete(f"/groups/{group_id}", params={"user_id": str(user.id)}, headers=auth_header)
     assert response.status_code == 200
     assert response.json()["status"] == "deleted"
 
@@ -169,10 +183,10 @@ def group_with_deck_and_cards(db, user):
 
 
 
-def test_get_group_decks(client_with_db, group_with_deck_and_cards, user):
+def test_get_group_decks(client_with_db, group_with_deck_and_cards, user, auth_header):
     group, _, deck, card = group_with_deck_and_cards
 
-    response = client_with_db.get(f"/groups/{group.id}/decks", params={"user_id": str(user.id)})
+    response = client_with_db.get(f"/groups/{group.id}/decks", params={"user_id": str(user.id)}, headers=auth_header)
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1
@@ -182,9 +196,15 @@ def test_get_group_decks(client_with_db, group_with_deck_and_cards, user):
     assert deck_data["cards"][0]["card_id"] == str(card.id)
 
 
-def test_group_decks_access_denied(client_with_db, group_with_deck_and_cards):
+def test_group_decks_access_denied(client_with_db, group_with_deck_and_cards, auth_header):
     group, _, _, _ = group_with_deck_and_cards
     fake_user_id = str(uuid.uuid4())
 
-    response = client_with_db.get(f"/groups/{group.id}/decks", params={"user_id": fake_user_id})
-    assert response.status_code == 404
+    # создаем токен для "фейкового" пользователя
+    fake_auth_header = {"Authorization": f"Bearer {fake_user_id}"}
+
+    response = client_with_db.get(
+        f"/groups/{group.id}/decks",
+        headers=fake_auth_header
+    )
+    assert response.status_code == 401

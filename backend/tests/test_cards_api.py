@@ -24,6 +24,9 @@ from sqlalchemy import text
 from app.models.user_study_group import UserStudyGroup
 from app.models import CardLevel
 
+from app.core.security import hash_password
+
+
 # -----------------------------
 # DB session fixture
 # -----------------------------
@@ -51,49 +54,37 @@ def client_with_db(db):
 # Fixtures для тестовых данных
 # -----------------------------
 @pytest.fixture
-def user(db):
+def user(db: Session):
     u = User(
         id=uuid.uuid4(),
-        email=f"test_{uuid.uuid4()}@example.com",
-        password_hash="hashed",
-        username="testuser",
+        email=f"user_{uuid.uuid4().hex[:20]}@example.com",  # ограничиваем длину email
+        username=f"user_{uuid.uuid4().hex[:20]}",           # ограничиваем длину username
+        password_hash=hash_password("password123")         # фиксированный короткий пароль
     )
     db.add(u)
     db.commit()
     db.refresh(u)
     yield u
-    # db.delete(u)
-    # db.commit()
+
+
+
 
 # -----------------------------
 # JWT Auth fixture
 # -----------------------------
 @pytest.fixture
 def auth_header(client_with_db, user):
-    # создаем токен напрямую через login endpoint
-    response = client_with_db.post("/auth/login", params={
-        "email": user.email,
-        "password": "hashed"  # используем пароль из фикстуры
-    })
+    response = client_with_db.post(
+        "/auth/login",
+        json={
+            "email": user.email,
+            "password": "password123",
+        },
+    )
     assert response.status_code == 200
+
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
-
-@pytest.fixture
-def deck(db, user):
-    d = Deck(
-        id=uuid.uuid4(),
-        owner_id=user.id,
-        title="Тестовая колода",
-        description="Описание",
-        is_public=True,
-    )
-    db.add(d)
-    db.commit()
-    db.refresh(d)
-    yield d
-    # db.delete(d)
-    # db.commit()
 
 
 @pytest.fixture
@@ -149,26 +140,27 @@ def user_settings(db, user):
 
 # --- пользователи ---
 
+# -----------------------------
+# Другой пользователь
+# -----------------------------
 @pytest.fixture
 def other_user(db: Session):
     u = User(
-        id=str(uuid.uuid4()),
-        email=f"test_{uuid.uuid4()}@example.com",
-        username="user2",
-        password_hash="hashed_password"
+        id=uuid.uuid4(),
+        email=f"user_{uuid.uuid4().hex[:20]}@example.com",
+        username=f"user_{uuid.uuid4().hex[:20]}",
+        password_hash=hash_password("password123")  # тоже фиксированный короткий пароль
     )
     db.add(u)
     db.commit()
     db.refresh(u)
     yield u
-    # db.delete(u)
-    # db.commit()
 
 # --- колоды ---
 @pytest.fixture
 def deck(db: Session, user: User):
     d = Deck(
-        id=str(uuid.uuid4()),
+        id=uuid.uuid4(),
         title="Deck 1",
         owner_id=user.id,
         is_public=True  # у тебя public вместо private
@@ -183,7 +175,7 @@ def deck(db: Session, user: User):
 @pytest.fixture
 def other_deck(db: Session, other_user: User):
     d = Deck(
-        id=str(uuid.uuid4()),
+        id=uuid.uuid4(),
         title="Deck 2",
         owner_id=other_user.id,
         is_public=False
@@ -199,7 +191,7 @@ def other_deck(db: Session, other_user: User):
 @pytest.fixture
 def card(db: Session, deck: Deck):
     c = Card(
-        id=str(uuid.uuid4()),
+        id=uuid.uuid4(),
         deck_id=deck.id,
         title="Card 1",
         type="basic",
@@ -215,7 +207,7 @@ def card(db: Session, deck: Deck):
 @pytest.fixture
 def group(db: Session, user: User):
     g = StudyGroup(
-        id=str(uuid.uuid4()),
+        id=uuid.uuid4(),
         title="Test Group",
         owner_id=user.id
     )
@@ -245,7 +237,7 @@ def user_group(db: Session, user):
 @pytest.fixture
 def deck_in_group(db: Session, user_group: UserStudyGroup, user: User):
     d = Deck(
-        id=str(uuid.uuid4()),
+        id=uuid.uuid4(),
         title="Deck In Group",
         owner_id=user.id,
         is_public=True
@@ -280,7 +272,7 @@ def deck_in_group(db: Session, user_group: UserStudyGroup, user: User):
 @pytest.fixture
 def deck_not_in_group(db: Session, other_user: User):
     d = Deck(
-        id=str(uuid.uuid4()),
+        id=uuid.uuid4(),
         title="Deck Not In Group",
         owner_id=other_user.id,  # другой пользователь
         is_public=False
@@ -469,9 +461,9 @@ def test_level_up(db: Session, start_level, max_level, expected, auth_header):
     # 1️⃣ Создаём пользователя
     user = User(
         id=uuid.uuid4(),
-        email=f"user_{uuid.uuid4()}@example.com",
-        username=f"user_{uuid.uuid4()}",
-        password_hash="hashed"
+        email=f"user_{uuid.uuid4().hex[:20]}@example.com",  # ограничиваем
+        username=f"user_{uuid.uuid4().hex[:20]}",  # ограничиваем
+        password_hash=hash_password("password123")
     )
     db.add(user)
     db.commit()
@@ -532,9 +524,9 @@ def test_level_down(db: Session, start_level, expected):
     # 1️⃣ Создаём пользователя
     user = User(
         id=uuid.uuid4(),
-        email=f"user_{uuid.uuid4()}@example.com",
-        username=f"user_{uuid.uuid4()}",
-        password_hash="hashed"
+        email=f"user_{uuid.uuid4().hex[:20]}@example.com",  # ограничиваем
+        username=f"user_{uuid.uuid4().hex[:20]}",  # ограничиваем
+        password_hash=hash_password("password123")
     )
     db.add(user)
     db.commit()
