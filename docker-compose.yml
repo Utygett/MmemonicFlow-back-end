@@ -14,3 +14,5 @@ services:
 
 volumes:
   flashcards_data:
+
+#docker-compose up -d
