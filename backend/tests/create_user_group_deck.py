@@ -10,11 +10,11 @@ from app.models import (
 )
 
 USER_EMAIL = "123@email.com"   # 👈 поменяй при необходимости
-DECK_TITLE = "Seeded Deck"
+DECK_TITLE = "Seeded Deck 2 "
 CARD_TITLES = [
-    "What is Python?",
-    "What is FastAPI?",
-    "What is SQLAlchemy?",
+    "What is Python 2?",
+    "What is FastAPI 2?",
+    "What is SQLAlchemy 2?",
 ]
 
 db = SessionLocal()

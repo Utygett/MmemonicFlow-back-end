@@ -79,8 +79,24 @@ def get_cards_for_review(user_id: str = Depends(get_current_user_id), limit: int
 def review_card(card_id: str, request: ReviewRequest, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
     # 1. Получаем текущий прогресс
     progress = db.query(CardProgress).filter_by(card_id=card_id, user_id=user_id).first()
+
+    # 1a. Если прогресс не найден — создаём его автоматически
     if not progress:
-        raise HTTPException(status_code=404, detail="Progress not found")
+        progress = CardProgress(
+            card_id=card_id,
+            user_id=user_id,
+            current_level=0,
+            active_level=0,
+            streak=0,
+            last_reviewed=datetime.now(timezone.utc),
+            next_review=datetime.now(timezone.utc)
+        )
+        db.add(progress)
+        db.commit()
+        db.refresh(progress)
+
+    if not progress:
+        raise HTTPException(status_code=404, detail="Error find or create progress")
 
     # 2. Получаем карточку
     card = db.get(Card, card_id)
@@ -90,7 +106,15 @@ def review_card(card_id: str, request: ReviewRequest, user_id: str = Depends(get
     # 3. Получаем настройки пользователя
     settings = db.query(UserLearningSettings).filter_by(user_id=user_id).first()
     if not settings:
-        raise HTTPException(status_code=404, detail="User settings not found")
+        # Создаём настройки по умолчанию
+        settings = UserLearningSettings(
+            user_id=user_id,
+        )
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    if not settings:
+        raise HTTPException(status_code=404, detail="Error create or find User settings")
 
     # 4. Вызываем domain-сервис (чистый)
     from app.services.review_service import ReviewService
