@@ -21,6 +21,7 @@ from app.models.card_level import CardLevel
 from app.schemas.cards import DeckWithCards, CardSummary, CardLevelContent
 from app.auth.dependencies import get_current_user_id
 from app.schemas.cards import CreateCardRequest
+from app.schemas.cards import ReplaceLevelsRequest
 
 router = APIRouter()
 
@@ -410,3 +411,44 @@ def create_card(
             for l in created_levels
         ]
     )
+
+@router.put("/{card_id}/levels")
+def replace_card_levels(
+    card_id: UUID,
+    payload: ReplaceLevelsRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    card = (
+        db.query(Card)
+        .join(Deck, Card.deck_id == Deck.id)
+        .filter(Card.id == card_id, Deck.owner_id == user_id)
+        .first()
+    )
+    if not card:
+        raise HTTPException(404, "Card not found")
+
+    # Важно: работаем по порядку массива levels => индексы 0..N-1
+    new_count = len(payload.levels)
+
+    # upsert уровней 0..N-1
+    for idx, lvl in enumerate(payload.levels):
+        level = db.query(CardLevel).filter_by(card_id=card_id, level_index=idx).first()
+        content = {"question": lvl.question, "answer": lvl.answer}
+
+        if level:
+            level.content = content
+        else:
+            db.add(CardLevel(card_id=card_id, level_index=idx, content=content))
+
+    # удалить “хвост” старых уровней, которые больше не нужны
+    db.query(CardLevel).filter(
+        CardLevel.card_id == card_id,
+        CardLevel.level_index >= new_count
+    ).delete(synchronize_session=False)
+
+    # синхронизируем max_level
+    card.max_level = new_count
+
+    db.commit()
+    return {"status": "ok", "max_level": new_count}

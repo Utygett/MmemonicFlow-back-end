@@ -22,6 +22,9 @@ class CreateCardRequest(BaseModel):
     type: str
     levels: List[CardLevelPayload]
 
+class ReplaceLevelsRequest(BaseModel):
+    levels: List[CardLevelPayload]
+
 class DeckWithCards(BaseModel):
     deck_id: UUID
     title: str
