@@ -20,6 +20,7 @@ from app.models import Deck
 from app.models.card_level import CardLevel
 from app.schemas.cards import DeckWithCards, CardSummary, CardLevelContent
 from app.auth.dependencies import get_current_user_id
+from app.schemas.cards import CreateCardRequest
 
 router = APIRouter()
 
@@ -255,40 +256,6 @@ def level_down(card_id: str, user_id: str = Depends(get_current_user_id), db: Se
     return {"active_level": progress.active_level}
 
 
-@router.post("/", response_model=CardSummary)
-def create_card(
-    deck_id: UUID,
-    title: str,
-    type: str,
-    max_level: int,
-    user_id: str = Depends(get_current_user_id),
-    db: Session = Depends(get_db),
-):
-    # проверяем, что колода доступна пользователю
-    deck = db.query(Deck).filter(
-        Deck.id == deck_id,
-        (Deck.owner_id == user_id) | (Deck.is_public == True)
-    ).first()
-    if not deck:
-        raise HTTPException(403, "Deck not accessible")
-
-    card = Card(
-        deck_id=deck_id,
-        title=title,
-        type=type,
-        max_level=max_level,
-    )
-    db.add(card)
-    db.commit()
-    db.refresh(card)
-
-    return CardSummary(
-        card_id=card.id,
-        title=card.title,
-        type=card.type,
-        levels=[]
-    )
-
 @router.delete("/{card_id}")
 def delete_card(card_id: UUID, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
     card = db.query(Card).join(Deck).filter(
@@ -398,3 +365,48 @@ def delete_card_level(
     db.delete(level)
     db.commit()
     return {"status": "ok"}
+
+@router.post("/", response_model=CardSummary)
+def create_card(
+    payload: CreateCardRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    deck = db.query(Deck).filter(
+        Deck.id == payload.deck_id,
+        (Deck.owner_id == user_id) | (Deck.is_public == True)
+    ).first()
+    if not deck:
+        raise HTTPException(403, "Deck not accessible")
+
+    card = Card(
+        deck_id=payload.deck_id,
+        title=payload.title,
+        type=payload.type,
+        max_level=len(payload.levels),
+    )
+    db.add(card)
+    db.commit()
+    db.refresh(card)
+
+    created_levels = []
+    for idx, lvl in enumerate(payload.levels):
+        level = CardLevel(
+            card_id=card.id,
+            level_index=idx,
+            content={"question": lvl.question, "answer": lvl.answer},
+        )
+        db.add(level)
+        created_levels.append(level)
+
+    db.commit()
+
+    return CardSummary(
+        card_id=card.id,
+        title=card.title,
+        type=card.type,
+        levels=[
+            CardLevelContent(level_index=l.level_index, content=l.content)
+            for l in created_levels
+        ]
+    )

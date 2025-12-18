@@ -12,6 +12,16 @@ class CardSummary(BaseModel):
     type: str
     levels: Optional[List[CardLevelContent]] = []
 
+class CardLevelPayload(BaseModel):
+    question: str
+    answer: str
+
+class CreateCardRequest(BaseModel):
+    deck_id: UUID
+    title: str
+    type: str
+    levels: List[CardLevelPayload]
+
 class DeckWithCards(BaseModel):
     deck_id: UUID
     title: str

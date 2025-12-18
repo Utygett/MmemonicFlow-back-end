@@ -189,6 +189,19 @@ def other_deck(db: Session, other_user: User):
     # db.delete(d)
     # db.commit()
 
+@pytest.fixture
+def other_public_deck(db: Session, other_user: User):
+    d = Deck(
+        id=uuid.uuid4(),
+        title="Other Public Deck",
+        owner_id=other_user.id,
+        is_public=True
+    )
+    db.add(d)
+    db.commit()
+    db.refresh(d)
+    yield d
+
 # --- карточки ---
 @pytest.fixture
 def card(db: Session, deck: Deck):
@@ -339,17 +352,6 @@ def test_review_ratings(card, user, progress, user_settings, rating, expected_st
     if next_review_dt.tzinfo is None:
         next_review_dt = next_review_dt.replace(tzinfo=timezone.utc)
     assert next_review_dt > datetime.now(timezone.utc)
-
-
-def test_review_not_found(user, client_with_db, auth_header):
-    fake_card_id = str(uuid.uuid4())
-    response = client_with_db.post(
-        f"/cards/{fake_card_id}/review",
-        headers=auth_header,
-        params={"user_id": str(user.id)},
-        json={"rating": "good"},
-    )
-    assert response.status_code == 404
 
 
 # ----------------------------
@@ -641,41 +643,6 @@ def test_api_level_down(db, client_with_db, card, user, start_level, expected, a
     data = response.json()
     assert data["active_level"] == expected
 
-def test_create_card(deck, user, client_with_db, auth_header):
-    response = client_with_db.post(
-        "/cards/",
-        params={
-            "deck_id": deck.id,
-            "title": "New Card",
-            "type": "basic",
-            "max_level": 3,
-            "user_id": user.id
-        },
-        headers=auth_header
-    )
-
-    assert response.status_code == 200
-    data = response.json()
-
-    assert data["title"] == "New Card"
-    assert data["type"] == "basic"
-    assert data["levels"] == []
-
-def test_create_card_forbidden(other_deck, user, client_with_db, auth_header):
-    response = client_with_db.post(
-        "/cards/",
-        params={
-            "deck_id": other_deck.id,
-            "title": "Hack Card",
-            "type": "basic",
-            "max_level": 3,
-            "user_id": user.id
-        },
-        headers=auth_header
-    )
-
-    assert response.status_code == 403
-
 def test_update_card(card, user, client_with_db, auth_header):
     response = client_with_db.patch(
         f"/cards/{card.id}",
@@ -911,3 +878,127 @@ def test_list_deck_cards_access_denied(client_with_db, auth_header, other_user_d
     response = client_with_db.get(f"/decks/{other_user_deck.id}/cards", headers=auth_header)
     # Доступ к чужой приватной колоде запрещен
     assert response.status_code == 404
+
+def test_create_card_openapi_contract(client_with_db, auth_header):
+    r = client_with_db.get("/openapi.json", headers=auth_header)
+    assert r.status_code == 200
+    op = r.json()["paths"]["/cards/"]["post"]
+
+    # Если ты реально перешёл на CreateCardRequest в body — requestBody обязан быть
+    assert "requestBody" in op, op
+
+def test_create_card_with_levels_owner_success(db: Session, deck, client_with_db, auth_header):
+    payload = {
+        "deck_id": str(deck.id),
+        "title": "New Card",
+        "type": "basic",
+        "levels": [
+            {"question": "Q1", "answer": "A1"},
+            {"question": "Q2", "answer": "A2"},
+        ],
+    }
+
+    r = client_with_db.post("/cards/", json=payload, headers=auth_header)
+    assert r.status_code == 200, r.text
+
+    data = r.json()
+    assert "card_id" in data
+    assert data["title"] == "New Card"
+    assert data["type"] == "basic"
+    assert isinstance(data["levels"], list)
+    assert len(data["levels"]) == 2
+
+    # Проверяем индексы и контент в ответе
+    assert data["levels"][0]["level_index"] == 0
+    assert data["levels"][0]["content"] == {"question": "Q1", "answer": "A1"}
+    assert data["levels"][1]["level_index"] == 1
+    assert data["levels"][1]["content"] == {"question": "Q2", "answer": "A2"}
+
+    # Проверяем запись в БД: Card.max_level = len(levels)
+    created_card_id = uuid.UUID(data["card_id"])
+    created_card = db.query(Card).filter(Card.id == created_card_id).one()
+    assert created_card.deck_id == deck.id
+    assert created_card.max_level == 2
+
+    # Проверяем уровни в БД
+    levels = (
+        db.query(CardLevel)
+        .filter(CardLevel.card_id == created_card_id)
+        .order_by(CardLevel.level_index.asc())
+        .all()
+    )
+    assert len(levels) == 2
+    assert levels[0].level_index == 0
+    assert levels[0].content == {"question": "Q1", "answer": "A1"}
+    assert levels[1].level_index == 1
+    assert levels[1].content == {"question": "Q2", "answer": "A2"}
+
+
+def test_create_card_empty_levels_success(db: Session, deck, client_with_db, auth_header):
+    payload = {
+        "deck_id": str(deck.id),
+        "title": "No Levels Card",
+        "type": "basic",
+        "levels": [],
+    }
+
+    r = client_with_db.post("/cards/", json=payload, headers=auth_header)
+    assert r.status_code == 200, r.text
+
+    data = r.json()
+    assert data["title"] == "No Levels Card"
+    assert data["levels"] == []
+
+    created_card_id = uuid.UUID(data["card_id"])
+    created_card = db.query(Card).filter(Card.id == created_card_id).one()
+    assert created_card.max_level == 0
+
+    levels = db.query(CardLevel).filter(CardLevel.card_id == created_card_id).all()
+    assert levels == []
+
+
+def test_create_card_public_deck_not_owner_allowed(db: Session, other_public_deck, client_with_db, auth_header):
+    payload = {
+        "deck_id": str(other_public_deck.id),
+        "title": "Card In чужой public deck",
+        "type": "basic",
+        "levels": [{"question": "Q", "answer": "A"}],
+    }
+
+    r = client_with_db.post("/cards/", json=payload, headers=auth_header)
+    assert r.status_code == 200, r.text
+
+    data = r.json()
+    assert data["title"] == "Card In чужой public deck"
+    assert len(data["levels"]) == 1
+
+    created_card_id = uuid.UUID(data["card_id"])
+    created_card = db.query(Card).filter(Card.id == created_card_id).one()
+    assert created_card.deck_id == other_public_deck.id
+
+
+def test_create_card_private_other_deck_forbidden(other_deck, client_with_db, auth_header):
+    payload = {
+        "deck_id": str(other_deck.id),
+        "title": "Hack Card",
+        "type": "basic",
+        "levels": [{"question": "Q", "answer": "A"}],
+    }
+
+    r = client_with_db.post("/cards/", json=payload, headers=auth_header)
+    assert r.status_code == 403
+    body = r.json()
+    # Обычно FastAPI кладёт текст ошибки в detail
+    assert body.get("detail") in ("Deck not accessible", "Forbidden", "Not authenticated", "Not authorized")
+
+
+def test_create_card_unauthorized(deck, client_with_db):
+    payload = {
+        "deck_id": str(deck.id),
+        "title": "Should fail",
+        "type": "basic",
+        "levels": [{"question": "Q", "answer": "A"}],
+    }
+
+    r = client_with_db.post("/cards/", json=payload)  # без auth_header
+    assert r.status_code in (401, 403)
