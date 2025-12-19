@@ -23,6 +23,8 @@ from app.auth.dependencies import get_current_user_id
 from app.schemas.cards import CreateCardRequest
 from app.schemas.cards import ReplaceLevelsRequest
 
+from app.schemas.cards import CardForReviewWithLevels
+
 router = APIRouter()
 
 # Dependency для базы
@@ -452,3 +454,63 @@ def replace_card_levels(
 
     db.commit()
     return {"status": "ok", "max_level": new_count}
+
+
+@router.get("/review_with_levels", response_model=List[CardForReviewWithLevels])
+def get_cards_for_review_with_levels(
+    user_id: str = Depends(get_current_user_id),
+    limit: int = 20,
+    db: Session = Depends(get_db),
+):
+    progress_list = (
+        db.query(CardProgress)
+        .filter(CardProgress.user_id == user_id)
+        .filter(CardProgress.next_review <= datetime.now(timezone.utc))
+        .order_by(CardProgress.next_review.asc())
+        .limit(limit)
+        .all()
+    )
+
+    card_ids = [p.card_id for p in progress_list]
+
+    # levels пачкой (без N+1)
+    levels_all = (
+        db.query(CardLevel)
+        .filter(CardLevel.card_id.in_(card_ids))
+        .order_by(CardLevel.card_id.asc(), CardLevel.level_index.asc())
+        .all()
+    )
+    levels_by_card = {}
+    for lvl in levels_all:
+        levels_by_card.setdefault(lvl.card_id, []).append(lvl)
+
+    result = []
+    for progress in progress_list:
+        card = db.get(Card, progress.card_id)
+
+        level = (
+            db.query(CardLevel)
+            .filter(CardLevel.card_id == card.id, CardLevel.level_index == progress.active_level)
+            .first()
+        )
+        level_content = level.content if level else {}
+
+        result.append(
+            CardForReviewWithLevels(
+                card_id=card.id,
+                deck_id=card.deck_id,
+                title=card.title,
+                type=card.type,
+                content=level_content,
+                current_level=progress.current_level,
+                active_level=progress.active_level,
+                streak=progress.streak,
+                next_review=progress.next_review,
+                levels=[
+                    CardLevelContent(level_index=l.level_index, content=l.content)
+                    for l in levels_by_card.get(card.id, [])
+                ],
+            )
+        )
+
+    return result

@@ -1,5 +1,7 @@
 import uuid
-from sqlalchemy import String, Integer, ForeignKey
+from datetime import datetime
+
+from sqlalchemy import String, Integer, ForeignKey, func, DateTime
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
@@ -27,6 +29,12 @@ class Card(Base):
     max_level: Mapped[int] = mapped_column(Integer)
 
     settings: Mapped[dict | None] = mapped_column(JSONB)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
 
     progress = relationship(
         "CardProgress",
