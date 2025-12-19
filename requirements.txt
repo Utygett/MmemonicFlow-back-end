@@ -6,3 +6,7 @@ uvicorn
 sqlalchemy
 psycopg2-binary
 pydantic
+email-validator
+bcrypt==3.2.2
+
+

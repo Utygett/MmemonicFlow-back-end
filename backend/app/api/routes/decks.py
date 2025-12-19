@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
+from fastapi import status
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
@@ -16,6 +17,7 @@ from app.models.card_level import CardLevel
 from app.schemas.card_review import CardForReview
 from app.models import CardProgress
 from app.schemas.cards import DeckSessionCard
+from app.schemas.cards import DeckSummary, DeckCreate
 
 router = APIRouter(tags=["decks"])
 
@@ -163,3 +165,56 @@ def get_deck_session(
         )
 
     return result
+
+
+@router.post("/", response_model=DeckSummary, status_code=status.HTTP_201_CREATED)
+def create_deck(
+    payload: DeckCreate,
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    # важно: в моделях UUID, а get_current_user_id у тебя сейчас отдаёт str
+    try:
+        user_uuid = UUID(user_id)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid user id")
+
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Title is required")
+
+    # 1) найти любую группу пользователя (у тебя их может быть несколько)
+    ug = (
+        db.query(UserStudyGroup)
+        .filter(UserStudyGroup.user_id == user_uuid)
+        .first()
+    )
+
+    # 2) если групп нет — создаём одну "личную"
+    if not ug:
+        ug = UserStudyGroup(user_id=user_uuid, title_override="Мои колоды")
+        db.add(ug)
+        db.flush()  # чтобы ug.id появился в рамках транзакции
+
+    # 3) создать Deck
+    deck = Deck(
+        owner_id=user_uuid,
+        title=title,
+        description=payload.description,
+        color=payload.color or "#4A6FA5",
+        is_public=False,
+    )
+    db.add(deck)
+    db.flush()  # чтобы deck.id появился
+
+    # 4) привязать Deck к группе (иначе list_user_decks её не вернёт)
+    link = UserStudyGroupDeck(
+        user_group_id=ug.id,
+        deck_id=deck.id,
+        order_index=0,
+    )
+    db.add(link)
+
+    db.commit()
+
+    return DeckSummary(deck_id=deck.id, title=deck.title)

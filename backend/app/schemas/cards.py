@@ -57,3 +57,9 @@ class DeckSessionCard(BaseModel):
     type: str
     active_level: int
     levels: List[CardLevelContent]
+
+
+class DeckCreate(BaseModel):
+    title: str
+    description: str | None = None
+    color: str | None = None  # можно валидировать regex под hex, если хочется

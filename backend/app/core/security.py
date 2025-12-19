@@ -5,9 +5,13 @@ from jose import jwt
 from app.models.user import User
 from app.db.session import SessionLocal
 from app.core.config import settings
+from passlib.context import CryptContext
 
 security = HTTPBearer()  # читает заголовок Authorization: Bearer <token>
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+pwd_context = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
+
 
 def hash_password(password: str) -> str:
     # Обрезаем до 72 байт в utf-8, потом обратно в str
