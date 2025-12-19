@@ -11,9 +11,9 @@ from app.db.init_db import init_db
 
 app = FastAPI(title="Flashcards API")
 
-# @app.on_event("startup")
-# def on_startup():
-    # init_db()
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
 origins = [
     "http://localhost:8080",
