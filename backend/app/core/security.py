@@ -1,3 +1,4 @@
+# backend/app/core/security.py
 from uuid import UUID
 
 from passlib.context import CryptContext
@@ -9,6 +10,7 @@ from app.db.session import SessionLocal
 from app.core.config import settings
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
+from app.auth.jwt import decode_access_token  # добавь импорт
 
 security = HTTPBearer()  # читает заголовок Authorization: Bearer <token>
 
@@ -42,19 +44,21 @@ def get_current_user(
 ) -> User:
     token = credentials.credentials
 
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        sub = payload.get("sub")
-        if not sub:
-            raise HTTPException(status_code=401, detail="Invalid token")
+    payload = decode_access_token(token)  # <-- ещё и проверит type == "access"
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-        user_id = UUID(sub)  # <-- ключевая строка
-    except (JWTError, ValueError):
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    try:
+        user_id = UUID(sub)
+    except ValueError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        # лучше 401, чтобы не палить “существует/нет”, и фронт корректно разлогинивал
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
     return user
