@@ -40,14 +40,15 @@ def register(
     data: RegisterRequest,
     db: Session = Depends(get_db),
 ):
-    existing_user = db.query(User).filter(User.email == data.email).first()
+    lower_email = data.email.lower()
+    existing_user = db.query(User).filter(User.email == lower_email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="User already exists")
 
     user = User(
         id=uuid4(),
         username="user",
-        email=data.email,
+        email=lower_email,
         password_hash=hash_password(data.password),
         # created_at=datetime.now(timezone.utc),
     )
@@ -70,7 +71,8 @@ def login(
     data: LoginRequest,
     db: Session = Depends(get_db),
 ):
-    user = db.query(User).filter(User.email == data.email).first()
+    lower_email = data.email.lower()
+    user = db.query(User).filter(User.email == lower_email).first()
 
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
