@@ -9,7 +9,7 @@ def create_listing(output_file="listing.txt"):
     """
 
     # Папки для обработки
-    folders = ["app", "tests"]
+    folders = ["app/models"]
 
     # Папки и файлы для исключения
     exclude_dirs = {"__pycache__", ".git", ".idea", ".vscode", "node_modules", "venv", "env", ".pytest_cache"}

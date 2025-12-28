@@ -33,10 +33,10 @@ class UserLearningSettings(Base):
     base_interval_minutes: Mapped[int] = mapped_column(Integer, default=1440, nullable=False)
 
     # Насколько уровень карточки влияет на интервал
-    level_factor: Mapped[float] = mapped_column(Float, default=0.6, nullable=False)
+    level_factor: Mapped[float] = mapped_column(Float, default=1, nullable=False)
 
     # Насколько streak влияет на интервал
-    streak_factor: Mapped[float] = mapped_column(Float, default=0.15, nullable=False)
+    streak_factor: Mapped[float] = mapped_column(Float, default=0.55, nullable=False)
 
     # Штраф при ответе "again"
     again_penalty: Mapped[float] = mapped_column(Float, default=0.3, nullable=False)

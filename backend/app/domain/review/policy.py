@@ -14,44 +14,34 @@ class ReviewPolicy:
     """
 
     RATING_MULTIPLIERS = {
-        ReviewRating.again: 0.1,
+        ReviewRating.again: 0.01,
         ReviewRating.hard: 0.6,
         ReviewRating.good: 1.0,
         ReviewRating.easy: 1.8,
     }
 
-    def calculate_next_review(
-            self,
-            *,
-            state: CardProgressState,
-            rating: ReviewRating,
-            settings: LearningSettingsSnapshot,
-            now: datetime,
-    ) -> datetime:
-        """
-        Возвращает дату следующего повторения.
-        """
-
-        # 1. Базовый интервал
+    def calculate_next_review(self, *, state, rating, settings, now):
         base_interval = timedelta(minutes=settings.base_interval_minutes)
 
-        # 2. Множитель оценки
+        # 1. Множитель за текущий streak (ДО этого ответа)
+        current_streak_multiplier = 1 + state.streak * settings.streak_factor
+
+        # 2. Множитель за рейтинг
         rating_multiplier = self.RATING_MULTIPLIERS[rating]
 
-        # 3. Влияние уровня и streak
+        # 3. Множитель за уровень
         level_multiplier = 1 + state.active_level * settings.level_factor
-        streak_multiplier = 1 + state.streak * settings.streak_factor
 
-        # 4. Интервал
+        # 4. Штраф за again
+        penalty = settings.again_penalty if rating == ReviewRating.again else 1.0
+
+        # 5. Интервал
         interval = (
-            base_interval
-            * rating_multiplier
-            * level_multiplier
-            * streak_multiplier
+                base_interval
+                * current_streak_multiplier  # ← используем ТЕКУЩИЙ streak, не будущий!
+                * rating_multiplier
+                * level_multiplier
+                * penalty
         )
-
-        # 5. Штраф при again
-        if rating == ReviewRating.again:
-            interval *= settings.again_penalty
 
         return now + interval
