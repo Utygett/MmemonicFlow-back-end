@@ -2,7 +2,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class LearningSettingsSnapshot:
-    base_interval_minutes: int
-    level_factor: float
-    streak_factor: float
-    again_penalty: float
+    desired_retention: float
+    initial_stability: float
+    initial_difficulty: float
+    promote_stability_multiplier: float
+    promote_difficulty_delta: float

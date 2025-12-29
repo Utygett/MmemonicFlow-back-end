@@ -1,33 +1,24 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+# backend/app/api/routes/cards.py
 from datetime import datetime, timezone
-from sqlalchemy.orm import Session
-from app.models.deck import Deck
-from app.models.card import Card
-from app.models.card_level import CardLevel
-from app.models.user_study_group_deck import UserStudyGroupDeck
-from app.models.user_study_group import UserStudyGroup
-from app.schemas.cards import DeckWithCards, CardSummary
-from typing import Optional, List
 from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app.auth.dependencies import get_current_user_id
 from app.db.session import SessionLocal
 from app.models.card import Card
+from app.models.card_level import CardLevel
 from app.models.card_progress import CardProgress
+from app.models.card_review_history import CardReviewHistory
 from app.models.user_learning_settings import UserLearningSettings
 from app.schemas.card_review import CardForReview, ReviewRequest, ReviewResponse
+from app.schemas.cards import CardForReviewWithLevels, CardLevelContent
 from app.services.review_service import ReviewService
-from app.models.card_review_history import CardReviewHistory
-from app.models import Deck
-from app.models.card_level import CardLevel
-from app.schemas.cards import DeckWithCards, CardSummary, CardLevelContent
-from app.auth.dependencies import get_current_user_id
-from app.schemas.cards import CreateCardRequest
-from app.schemas.cards import ReplaceLevelsRequest
-
-from app.schemas.cards import CardForReviewWithLevels
 
 router = APIRouter()
 
-# Dependency для базы
+
 def get_db():
     db = SessionLocal()
     try:
@@ -35,465 +26,306 @@ def get_db():
     finally:
         db.close()
 
-# -------------------------------
-# Получение карточек для повторения
-# -------------------------------
-@router.get("/review", response_model=List[CardForReview])
-def get_cards_for_review(user_id: str = Depends(get_current_user_id), limit: int = 20, db: Session = Depends(get_db)):
+def _ensure_settings(db: Session, user_id: UUID) -> UserLearningSettings:
+    settings = db.query(UserLearningSettings).filter_by(user_id=user_id).first()
+    if settings:
+        return settings
+    settings = UserLearningSettings(user_id=user_id)
+    db.add(settings)
+    db.commit()
+    db.refresh(settings)
+    return settings
+
+
+def _ensure_active_progress(db: Session, *, user_id: UUID, card: Card, settings: UserLearningSettings) -> CardProgress:
+    # найти активный уровень
+    progress = (
+        db.query(CardProgress)
+        .filter_by(user_id=user_id, card_id=card.id, is_active=True)
+        .first()
+    )
+    if progress:
+        return progress
+
+    # если нет — создаём уровень 0
+    lvl0 = db.query(CardLevel).filter_by(card_id=card.id, level_index=0).first()
+    if not lvl0:
+        raise HTTPException(status_code=500, detail="Card has no level 0")
+
+    now = datetime.now(timezone.utc)
+    progress = CardProgress(
+        user_id=user_id,
+        card_id=card.id,
+        card_level_id=lvl0.id,
+        is_active=True,
+        stability=settings.initial_stability,
+        difficulty=settings.initial_difficulty,
+        last_reviewed=now,
+        next_review=now,
+    )
+    db.add(progress)
+    db.commit()
+    db.refresh(progress)
+    return progress
+
+
+@router.get("/review", response_model=list[CardForReview])
+def get_cards_for_review(
+    user_id: UUID = Depends(get_current_user_id),
+    limit: int = 20,
+    db: Session = Depends(get_db),
+):
+    user_uuid = user_id
+    now = datetime.now(timezone.utc)
+
     progress_list = (
         db.query(CardProgress)
-        .filter(CardProgress.user_id == user_id)
-        .filter(CardProgress.next_review <= datetime.now(timezone.utc))
+        .filter(CardProgress.user_id == user_uuid)
+        .filter(CardProgress.is_active == True)
+        .filter(CardProgress.next_review <= now)
         .order_by(CardProgress.next_review.asc())
         .limit(limit)
         .all()
     )
 
-    result = []
+    result: list[CardForReview] = []
     for progress in progress_list:
         card = db.get(Card, progress.card_id)
-        level = (
-            db.query(CardLevel)
-            .filter(
-                CardLevel.card_id == card.id,
-                CardLevel.level_index == progress.active_level
-            )
-            .first()
-        )
-        level_content = level.content if level else {}
+        level = db.get(CardLevel, progress.card_level_id)
         result.append(
             CardForReview(
                 card_id=card.id,
                 deck_id=card.deck_id,
                 title=card.title,
                 type=card.type,
-                content=level_content,
-                current_level=progress.current_level,
-                active_level=progress.active_level,
-                streak=progress.streak,
-                next_review=progress.next_review
+                card_level_id=level.id,
+                level_index=level.level_index,
+                content=level.content,
+                stability=progress.stability,
+                difficulty=progress.difficulty,
+                next_review=progress.next_review,
             )
         )
     return result
 
-# -------------------------------
-# Отправка рейтинга после повторения
-# -------------------------------
+
 @router.post("/{card_id}/review", response_model=ReviewResponse)
-def review_card(card_id: str, request: ReviewRequest, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
-    # 1. Получаем текущий прогресс
-    progress = db.query(CardProgress).filter_by(card_id=card_id, user_id=user_id).first()
+def review_card(
+    card_id: UUID,
+    request: ReviewRequest,
+    user_id: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    user_uuid = user_id
 
-    # 1a. Если прогресс не найден — создаём его автоматически
-    if not progress:
-        progress = CardProgress(
-            card_id=card_id,
-            user_id=user_id,
-            current_level=0,
-            active_level=0,
-            streak=0,
-            last_reviewed=datetime.now(timezone.utc),
-            next_review=datetime.now(timezone.utc)
-        )
-        db.add(progress)
-        db.commit()
-        db.refresh(progress)
-
-    if not progress:
-        raise HTTPException(status_code=404, detail="Error find or create progress")
-
-    # 2. Получаем карточку
     card = db.get(Card, card_id)
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
 
-    # 3. Получаем настройки пользователя
-    settings = db.query(UserLearningSettings).filter_by(user_id=user_id).first()
-    if not settings:
-        # Создаём настройки по умолчанию
-        settings = UserLearningSettings(
-            user_id=user_id,
-        )
-        db.add(settings)
-        db.commit()
-        db.refresh(settings)
-    if not settings:
-        raise HTTPException(status_code=404, detail="Error create or find User settings")
+    settings = _ensure_settings(db, user_uuid)
+    progress = _ensure_active_progress(db, user_id=user_uuid, card=card, settings=settings)
 
-    # 4. Вызываем domain-сервис (чистый)
-    from app.services.review_service import ReviewService
-    updated_state = ReviewService.review(
+    updated = ReviewService.review(
         progress=progress,
-        rating=request.rating.value  # передаем строку
+        rating=request.rating.value,
+        settings=settings,
     )
 
-    # 5. Обновляем прогресс в БД
-    progress.current_level = updated_state.current_level
-    progress.active_level = updated_state.active_level
-    progress.streak = updated_state.streak
-    progress.last_reviewed = updated_state.last_reviewed
-    progress.next_review = updated_state.next_review
+    # применяем результат к ORM progress
+    progress.stability = updated.stability
+    progress.difficulty = updated.difficulty
+    progress.last_reviewed = updated.last_reviewed
+    progress.next_review = updated.next_review
     db.add(progress)
 
-    # 6. Создаём запись в истории повторений
     history_entry = CardReviewHistory(
-        user_id=progress.user_id,
-        card_id=progress.card_id,
+        user_id=user_uuid,
+        card_id=card.id,
+        card_level_id=progress.card_level_id,
         rating=request.rating,
         interval_minutes=int((progress.next_review - progress.last_reviewed).total_seconds() // 60),
-        streak=progress.streak,
-        reviewed_at=progress.last_reviewed
+        streak=0,
+        reviewed_at=progress.last_reviewed,
     )
     db.add(history_entry)
 
-    # 7. Коммитим изменения
     db.commit()
     db.refresh(progress)
 
-    # 8. Возвращаем результат
+    level = db.get(CardLevel, progress.card_level_id)
     return ReviewResponse(
         card_id=card.id,
+        card_level_id=level.id,
+        level_index=level.level_index,
+        stability=progress.stability,
+        difficulty=progress.difficulty,
         next_review=progress.next_review,
-        current_level=progress.current_level,
-        active_level=progress.active_level,
-        streak=progress.streak
     )
 
-
-# -------------------------------
-# Список колод с карточками, фильтрацией по deck_id, приватности и группам
-# -------------------------------
-@router.get("/", response_model=List[DeckWithCards])
-def list_decks_with_cards(
-    user_id: str = Depends(get_current_user_id),
-    deck_id: Optional[UUID] = Query(None),
-    db: Session = Depends(get_db)
-):
-    # -------------------------------
-    # 1. Собираем доступные колоды
-    # -------------------------------
-    accessible_deck_ids = set()
-
-    # Публичные колоды
-    public_decks = db.query(Deck.id).filter(Deck.is_public == True)
-    accessible_deck_ids.update([d.id for d in public_decks])
-
-    # Собственные колоды пользователя
-    own_decks = db.query(Deck.id).filter(Deck.owner_id == user_id)
-    accessible_deck_ids.update([d.id for d in own_decks])
-
-    # Колоды групп пользователя
-    group_decks = (
-        db.query(UserStudyGroupDeck.deck_id)
-        .join(UserStudyGroup, UserStudyGroupDeck.user_group_id == UserStudyGroup.id)
-        .filter(UserStudyGroup.user_id == user_id)
-        .all()
-    )
-    accessible_deck_ids.update([d.deck_id for d in group_decks])
-
-    # Если указан конкретный deck_id, фильтруем
-    if deck_id:
-        if deck_id in accessible_deck_ids:
-            accessible_deck_ids = {deck_id}
-        else:
-            accessible_deck_ids = set()
-
-    # -------------------------------
-    # 2. Берем колоды и карточки
-    # -------------------------------
-    decks = db.query(Deck).filter(Deck.id.in_(accessible_deck_ids)).all()
-    result = []
-
-    for deck in decks:
-        cards = db.query(Card).filter(Card.deck_id == deck.id).all()
-        card_summaries = []
-
-        for card in cards:
-            # Берем все уровни карточки
-            levels = db.query(CardLevel).filter(CardLevel.card_id == card.id).all()
-            levels_data = [
-                CardLevelContent(level_index=l.level_index, content=l.content)
-                for l in levels
-            ]
-
-            card_summaries.append(
-                CardSummary(
-                    card_id=card.id,
-                    title=card.title,
-                    type=card.type,
-                    levels=levels_data
-                )
-            )
-
-        result.append(
-            DeckWithCards(
-                deck_id=deck.id,
-                title=deck.title,
-                cards=card_summaries
-            )
-        )
-
-    return result
 
 @router.post("/{card_id}/level_up")
-def level_up(card_id: str, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
-    progress = db.query(CardProgress).filter_by(card_id=card_id, user_id=user_id).first()
-    if not progress:
-        raise HTTPException(404, "Progress not found")
-
+def level_up(
+    card_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    user_uuid = user_id
     card = db.get(Card, card_id)
-    progress.increase_level(max_level=card.max_level)
+    if not card:
+        raise HTTPException(404, "Card not found")
+
+    settings = _ensure_settings(db, user_uuid)
+    current = (
+        db.query(CardProgress)
+        .filter_by(user_id=user_uuid, card_id=card_id, is_active=True)
+        .first()
+    )
+    if not current:
+        current = _ensure_active_progress(db, user_id=user_uuid, card=card, settings=settings)
+
+    current_level = db.get(CardLevel, current.card_level_id)
+    next_level_index = current_level.level_index + 1
+
+    next_level = (
+        db.query(CardLevel)
+        .filter_by(card_id=card_id, level_index=next_level_index)
+        .first()
+    )
+    if not next_level:
+        raise HTTPException(400, "No next level")
+
+    # deactivate current
+    current.is_active = False
+    db.add(current)
+    db.flush()
+
+    # activate/create next progress
+    next_progress = (
+        db.query(CardProgress)
+        .filter_by(user_id=user_uuid, card_level_id=next_level.id)
+        .first()
+    )
+
+    now = datetime.now(timezone.utc)
+    if not next_progress:
+        next_progress = CardProgress(
+            user_id=user_uuid,
+            card_id=card_id,
+            card_level_id=next_level.id,
+            is_active=True,
+            stability=current.stability * settings.promote_stability_multiplier,
+            difficulty=current.difficulty + settings.promote_difficulty_delta,
+            last_reviewed=now,
+            next_review=now,  # можно сделать now + 10 минут, если хочешь "контрольный" повтор
+        )
+        db.add(next_progress)
+    else:
+        next_progress.is_active = True
+        db.add(next_progress)
+
     db.commit()
-    db.refresh(progress)
-    return {"active_level": progress.active_level}
+    return {"active_level_index": next_level.level_index, "active_card_level_id": str(next_level.id)}
+
 
 @router.post("/{card_id}/level_down")
-def level_down(card_id: str, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
-    progress = db.query(CardProgress).filter_by(card_id=card_id, user_id=user_id).first()
-    if not progress:
-        raise HTTPException(404, "Progress not found")
-
-    progress.decrease_level()
-    db.commit()
-    db.refresh(progress)
-    return {"active_level": progress.active_level}
-
-
-@router.delete("/{card_id}")
-def delete_card(card_id: UUID, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
-    card = db.query(Card).join(Deck).filter(
-        Card.id == card_id,
-        Deck.owner_id == user_id
-    ).first()
-    if not card:
-        raise HTTPException(404, "Card not found")
-
-    db.delete(card)
-    db.commit()
-    return {"status": "ok"}
-
-@router.patch("/{card_id}", response_model=CardSummary)
-def update_card(
+def level_down(
     card_id: UUID,
-    title: Optional[str] = None,
-    type: Optional[str] = None,
-    max_level: Optional[int] = None,
-    user_id: str = Depends(get_current_user_id),
+    user_id: UUID = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    card = db.query(Card).join(Deck).filter(
-        Card.id == card_id,
-        Deck.owner_id == user_id
-    ).first()
+    user_uuid = user_id
+    card = db.get(Card, card_id)
     if not card:
         raise HTTPException(404, "Card not found")
 
-    if title is not None:
-        card.title = title
-    if type is not None:
-        card.type = type
-    if max_level is not None:
-        card.max_level = max_level
-
-    db.commit()
-    db.refresh(card)
-
-    levels = db.query(CardLevel).filter(CardLevel.card_id == card.id).all()
-
-    return CardSummary(
-        card_id=card.id,
-        title=card.title,
-        type=card.type,
-        levels=[
-            CardLevelContent(level_index=l.level_index, content=l.content)
-            for l in levels
-        ]
+    current = (
+        db.query(CardProgress)
+        .filter_by(user_id=user_uuid, card_id=card_id, is_active=True)
+        .first()
     )
+    if not current:
+        raise HTTPException(404, "Active progress not found")
 
-@router.put("/{card_id}/levels/{level_index}")
-def upsert_card_level(
-    card_id: UUID,
-    level_index: int,
-    content: dict,
-    user_id: str = Depends(get_current_user_id),
-    db: Session = Depends(get_db),
-):
-    card = db.query(Card).join(Deck).filter(
-        Card.id == card_id,
-        Deck.owner_id == user_id
-    ).first()
-    if not card:
-        raise HTTPException(404, "Card not found")
+    current_card_level = db.get(CardLevel, current.card_level_id)
+    prev_level_index = current_card_level.level_index - 1
+    if prev_level_index < 0:
+        raise HTTPException(400, "Already at level 0")
 
-    level = db.query(CardLevel).filter_by(
-        card_id=card_id,
-        level_index=level_index
-    ).first()
-
-    if level:
-        level.content = content
-    else:
-        level = CardLevel(
-            card_id=card_id,
-            level_index=level_index,
-            content=content
-        )
-        db.add(level)
-
-    db.commit()
-    return {"status": "ok"}
-
-@router.delete("/{card_id}/levels/{level_index}")
-def delete_card_level(
-    card_id: UUID,
-    level_index: int,
-    user_id: str = Depends(get_current_user_id),
-    db: Session = Depends(get_db),
-):
-    level = (
+    prev_level = (
         db.query(CardLevel)
-        .join(Card)
-        .join(Deck)
-        .filter(
-            CardLevel.card_id == card_id,
-            CardLevel.level_index == level_index,
-            Deck.owner_id == user_id
-        )
+        .filter_by(card_id=card_id, level_index=prev_level_index)
         .first()
     )
+    if not prev_level:
+        raise HTTPException(400, "No previous level")
 
-    if not level:
-        raise HTTPException(404, "Level not found")
+    # deactivate current
+    current.is_active = False
+    db.add(current)
+    db.flush()
 
-    db.delete(level)
-    db.commit()
-    return {"status": "ok"}
-
-@router.post("/", response_model=CardSummary)
-def create_card(
-    payload: CreateCardRequest,
-    user_id: str = Depends(get_current_user_id),
-    db: Session = Depends(get_db),
-):
-    deck = db.query(Deck).filter(
-        Deck.id == payload.deck_id,
-        (Deck.owner_id == user_id) | (Deck.is_public == True)
-    ).first()
-    if not deck:
-        raise HTTPException(403, "Deck not accessible")
-
-    card = Card(
-        deck_id=payload.deck_id,
-        title=payload.title,
-        type=payload.type,
-        max_level=len(payload.levels),
-    )
-    db.add(card)
-    db.commit()
-    db.refresh(card)
-
-    created_levels = []
-    for idx, lvl in enumerate(payload.levels):
-        level = CardLevel(
-            card_id=card.id,
-            level_index=idx,
-            content={"question": lvl.question, "answer": lvl.answer},
-        )
-        db.add(level)
-        created_levels.append(level)
-
-    db.commit()
-
-    return CardSummary(
-        card_id=card.id,
-        title=card.title,
-        type=card.type,
-        levels=[
-            CardLevelContent(level_index=l.level_index, content=l.content)
-            for l in created_levels
-        ]
-    )
-
-@router.put("/{card_id}/levels")
-def replace_card_levels(
-    card_id: UUID,
-    payload: ReplaceLevelsRequest,
-    user_id: str = Depends(get_current_user_id),
-    db: Session = Depends(get_db),
-):
-    card = (
-        db.query(Card)
-        .join(Deck, Card.deck_id == Deck.id)
-        .filter(Card.id == card_id, Deck.owner_id == user_id)
+    prev_progress = (
+        db.query(CardProgress)
+        .filter_by(user_id=user_uuid, card_level_id=prev_level.id)
         .first()
     )
-    if not card:
-        raise HTTPException(404, "Card not found")
-
-    # Важно: работаем по порядку массива levels => индексы 0..N-1
-    new_count = len(payload.levels)
-
-    # upsert уровней 0..N-1
-    for idx, lvl in enumerate(payload.levels):
-        level = db.query(CardLevel).filter_by(card_id=card_id, level_index=idx).first()
-        content = {"question": lvl.question, "answer": lvl.answer}
-
-        if level:
-            level.content = content
-        else:
-            db.add(CardLevel(card_id=card_id, level_index=idx, content=content))
-
-    # удалить “хвост” старых уровней, которые больше не нужны
-    db.query(CardLevel).filter(
-        CardLevel.card_id == card_id,
-        CardLevel.level_index >= new_count
-    ).delete(synchronize_session=False)
-
-    # синхронизируем max_level
-    card.max_level = new_count
+    if not prev_progress:
+        # если раньше не учил этот уровень — создаём
+        settings = _ensure_settings(db, user_uuid)
+        now = datetime.now(timezone.utc)
+        prev_progress = CardProgress(
+            user_id=user_uuid,
+            card_id=card_id,
+            card_level_id=prev_level.id,
+            is_active=True,
+            stability=settings.initial_stability,
+            difficulty=settings.initial_difficulty,
+            last_reviewed=now,
+            next_review=now,
+        )
+        db.add(prev_progress)
+    else:
+        prev_progress.is_active = True
+        db.add(prev_progress)
 
     db.commit()
-    return {"status": "ok", "max_level": new_count}
+    return {"active_level_index": prev_level.level_index, "active_card_level_id": str(prev_level.id)}
 
 
-@router.get("/review_with_levels", response_model=List[CardForReviewWithLevels])
+@router.get("/review_with_levels", response_model=list[CardForReviewWithLevels])
 def get_cards_for_review_with_levels(
-    user_id: str = Depends(get_current_user_id),
+    user_id: UUID = Depends(get_current_user_id),
     limit: int = 20,
     db: Session = Depends(get_db),
 ):
+    user_uuid = user_id
+    now = datetime.now(timezone.utc)
+
     progress_list = (
         db.query(CardProgress)
-        .filter(CardProgress.user_id == user_id)
-        .filter(CardProgress.next_review <= datetime.now(timezone.utc))
+        .filter(CardProgress.user_id == user_uuid)
+        .filter(CardProgress.is_active == True)
+        .filter(CardProgress.next_review <= now)
         .order_by(CardProgress.next_review.asc())
         .limit(limit)
         .all()
     )
 
     card_ids = [p.card_id for p in progress_list]
-
-    # levels пачкой (без N+1)
     levels_all = (
         db.query(CardLevel)
         .filter(CardLevel.card_id.in_(card_ids))
         .order_by(CardLevel.card_id.asc(), CardLevel.level_index.asc())
         .all()
     )
-    levels_by_card = {}
+    levels_by_card: dict[UUID, list[CardLevel]] = {}
     for lvl in levels_all:
         levels_by_card.setdefault(lvl.card_id, []).append(lvl)
 
-    result = []
+    result: list[CardForReviewWithLevels] = []
     for progress in progress_list:
         card = db.get(Card, progress.card_id)
-
-        level = (
-            db.query(CardLevel)
-            .filter(CardLevel.card_id == card.id, CardLevel.level_index == progress.active_level)
-            .first()
-        )
-        level_content = level.content if level else {}
+        level = db.get(CardLevel, progress.card_level_id)
 
         result.append(
             CardForReviewWithLevels(
@@ -501,10 +333,11 @@ def get_cards_for_review_with_levels(
                 deck_id=card.deck_id,
                 title=card.title,
                 type=card.type,
-                content=level_content,
-                current_level=progress.current_level,
-                active_level=progress.active_level,
-                streak=progress.streak,
+                card_level_id=level.id,
+                level_index=level.level_index,
+                content=level.content,
+                stability=progress.stability,
+                difficulty=progress.difficulty,
                 next_review=progress.next_review,
                 levels=[
                     CardLevelContent(level_index=l.level_index, content=l.content)
@@ -512,6 +345,4 @@ def get_cards_for_review_with_levels(
                 ],
             )
         )
-
     return result
-

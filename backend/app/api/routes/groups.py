@@ -30,7 +30,7 @@ def get_db():
 # Создать группу
 # -------------------------------
 @router.post("/", response_model=GroupResponse)
-def create_group(group_data: GroupCreate, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
+def create_group(group_data: GroupCreate, user_id: UUID = Depends(get_current_user_id), db: Session = Depends(get_db)):
     group = StudyGroup(
         owner_id=user_id,
         title=group_data.title,
@@ -63,7 +63,7 @@ def create_group(group_data: GroupCreate, user_id: str = Depends(get_current_use
 # Получить список групп пользователя
 # -------------------------------
 @router.get("/", response_model=List[GroupResponse])
-def list_groups(user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
+def list_groups(user_id: UUID = Depends(get_current_user_id), db: Session = Depends(get_db)):
     groups = (
         db.query(StudyGroup)
         .join(UserStudyGroup, UserStudyGroup.source_group_id == StudyGroup.id)
@@ -84,7 +84,7 @@ def list_groups(user_id: str = Depends(get_current_user_id), db: Session = Depen
 # Получить конкретную группу
 # -------------------------------
 @router.get("/{group_id}", response_model=GroupResponse)
-def get_group(group_id: str, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
+def get_group(group_id: UUID, user_id: UUID = Depends(get_current_user_id), db: Session = Depends(get_db)):
     group = (
         db.query(StudyGroup)
         .join(UserStudyGroup, UserStudyGroup.source_group_id == StudyGroup.id)
@@ -106,7 +106,7 @@ def get_group(group_id: str, user_id: str = Depends(get_current_user_id), db: Se
 # Обновить группу
 # -------------------------------
 @router.patch("/{group_id}", response_model=GroupResponse)
-def update_group(group_id: str, data: GroupUpdate, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
+def update_group(group_id: UUID, data: GroupUpdate, user_id: UUID = Depends(get_current_user_id), db: Session = Depends(get_db)):
     group = db.query(StudyGroup).filter(StudyGroup.id == group_id, StudyGroup.owner_id == user_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
@@ -130,7 +130,7 @@ def update_group(group_id: str, data: GroupUpdate, user_id: str = Depends(get_cu
 # Удалить группу
 # -------------------------------
 @router.delete("/{group_id}")
-def delete_group(group_id: str, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
+def delete_group(group_id: UUID, user_id: UUID = Depends(get_current_user_id), db: Session = Depends(get_db)):
     group = db.query(StudyGroup).filter(StudyGroup.id == group_id, StudyGroup.owner_id == user_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
@@ -146,7 +146,7 @@ def delete_group(group_id: str, user_id: str = Depends(get_current_user_id), db:
 # Получить колоды группы вместе с карточками
 # -------------------------------
 @router.get("/{group_id}/decks", response_model=list[DeckWithCards])
-def get_group_decks(group_id: str, user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
+def get_group_decks(group_id: UUID, user_id: UUID = Depends(get_current_user_id), db: Session = Depends(get_db)):
     # Проверяем, что пользователь связан с группой
     user_group = db.query(UserStudyGroup).filter(
         UserStudyGroup.user_id == user_id,

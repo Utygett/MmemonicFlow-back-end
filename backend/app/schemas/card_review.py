@@ -2,25 +2,35 @@ from datetime import datetime
 from pydantic import BaseModel
 from app.core.enums import ReviewRating
 from typing import Optional
-import uuid
+from uuid import UUID
+
 
 class CardForReview(BaseModel):
-    card_id: uuid.UUID
-    deck_id: uuid.UUID
+    card_id: UUID
+    deck_id: UUID
     title: str
     type: str
+
+    card_level_id: UUID
+    level_index: int
     content: dict
-    current_level: int
-    active_level: int
-    streak: int
+
+    stability: float
+    difficulty: float
+
     next_review: Optional[datetime]
+
 
 class ReviewRequest(BaseModel):
     rating: ReviewRating
 
+
 class ReviewResponse(BaseModel):
-    card_id: uuid.UUID
+    card_id: UUID
+
+    card_level_id: UUID
+    level_index: int
+
+    stability: float
+    difficulty: float
     next_review: datetime
-    current_level: int
-    active_level: int
-    streak: int

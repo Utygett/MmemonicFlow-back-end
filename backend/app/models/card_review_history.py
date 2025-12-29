@@ -1,10 +1,13 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import ForeignKey, String, Enum, Integer, DateTime
+
+from sqlalchemy import ForeignKey, Enum, Integer, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.db.base import Base
-from app.core.enums import ReviewRating  # твой существующий enum
+from app.core.enums import ReviewRating
+
 
 class CardReviewHistory(Base):
     __tablename__ = "card_review_history"
@@ -12,32 +15,43 @@ class CardReviewHistory(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
-        default=uuid.uuid4
+        default=uuid.uuid4,
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
-        index=True
+        index=True,
     )
 
     card_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("cards.id", ondelete="CASCADE"),
         nullable=False,
-        index=True
+        index=True,
+    )
+
+    # Ключевое: лог ревью привязываем к уровню
+    card_level_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("card_levels.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
 
     rating: Mapped[str] = mapped_column(
         Enum(ReviewRating, name="review_rating"),
-        nullable=False
+        nullable=False,
     )
 
     interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
-    streak: Mapped[int] = mapped_column(Integer, nullable=False)
-    reviewed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    # Relationships
+    # В новой системе можно не использовать, но оставим для совместимости/дебага
+    streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
     user = relationship("User", back_populates="review_history")
     card = relationship("Card", back_populates="review_history")
+    card_level = relationship("CardLevel", back_populates="review_history")

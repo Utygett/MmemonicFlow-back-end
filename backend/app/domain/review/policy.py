@@ -1,47 +1,42 @@
-# backend/app/domain/review/policy.py
-
+from dataclasses import replace
 from datetime import datetime, timedelta
+
 from app.core.enums import ReviewRating
-
+from .entities import CardLevelProgressState
 from .dto import LearningSettingsSnapshot
-from .entities import CardProgressState
-
 
 class ReviewPolicy:
-    """
-    Алгоритм расчёта следующего повторения.
-    Чистая domain-логика.
-    """
-
-    RATING_MULTIPLIERS = {
-        ReviewRating.again: 0.01,
-        ReviewRating.hard: 0.6,
-        ReviewRating.good: 1.0,
-        ReviewRating.easy: 1.8,
+    STABILITY_MULT = {
+        ReviewRating.again: 0.25,
+        ReviewRating.hard: 0.85,
+        ReviewRating.good: 1.15,
+        ReviewRating.easy: 1.35,
     }
 
-    def calculate_next_review(self, *, state, rating, settings, now):
-        base_interval = timedelta(minutes=settings.base_interval_minutes)
+    DIFFICULTY_DELTA = {
+        ReviewRating.again: +0.6,
+        ReviewRating.hard: +0.15,
+        ReviewRating.good: -0.05,
+        ReviewRating.easy: -0.15,
+    }
 
-        # 1. Множитель за текущий streak (ДО этого ответа)
-        current_streak_multiplier = 1 + state.streak * settings.streak_factor
+    def apply_review(
+        self,
+        *,
+        state: CardLevelProgressState,
+        rating: ReviewRating,
+        settings: LearningSettingsSnapshot,
+        now: datetime,
+    ) -> CardLevelProgressState:
+        new_difficulty = min(10.0, max(1.0, state.difficulty + self.DIFFICULTY_DELTA[rating]))
+        new_stability = max(0.0035, state.stability * self.STABILITY_MULT[rating])  # >= 5 минут (в днях)
 
-        # 2. Множитель за рейтинг
-        rating_multiplier = self.RATING_MULTIPLIERS[rating]
+        next_review = now + timedelta(days=new_stability)
 
-        # 3. Множитель за уровень
-        level_multiplier = 1 + state.active_level * settings.level_factor
-
-        # 4. Штраф за again
-        penalty = settings.again_penalty if rating == ReviewRating.again else 1.0
-
-        # 5. Интервал
-        interval = (
-                base_interval
-                * current_streak_multiplier  # ← используем ТЕКУЩИЙ streak, не будущий!
-                * rating_multiplier
-                * level_multiplier
-                * penalty
+        return replace(
+            state,
+            stability=new_stability,
+            difficulty=new_difficulty,
+            last_reviewed=now,
+            next_review=next_review,
         )
-
-        return now + interval
