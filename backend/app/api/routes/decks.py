@@ -18,6 +18,8 @@ from app.schemas.cards import DeckSummary, CardSummary, CardLevelContent, DeckSe
 from app.models.user_study_group import UserStudyGroup
 from app.models.user_study_group_deck import UserStudyGroupDeck
 
+from app.schemas.cards import DeckWithCards
+
 router = APIRouter(tags=["decks"])
 
 
@@ -224,3 +226,79 @@ def create_deck(
 
     db.commit()
     return DeckSummary(deck_id=deck.id, title=deck.title)
+
+@router.get("/{deck_id}", response_model=DeckWithCards)
+def get_deck_with_cards(
+    deck_id: UUID,
+    userid: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    # доступ как в listdeckcards: через линк user->group->deck [file:151]
+    link = (
+        db.query(UserStudyGroupDeck)
+        .join(UserStudyGroup)
+        .filter(UserStudyGroup.user_id == userid, UserStudyGroupDeck.deck_id == deck_id)
+        .first()
+    )
+    if not link:
+        raise HTTPException(status_code=404, detail="Deck not found or access denied")
+
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+
+    cards = db.query(Card).filter(Card.deck_id == deck_id).all()
+    result_cards = []
+    for card in cards:
+        levels = db.query(CardLevel).filter(CardLevel.card_id == card.id).all()
+        result_cards.append(
+            CardSummary(
+                card_id=card.id,
+                title=card.title,
+                type=card.type,
+                levels=[CardLevelContent(level_index=l.level_index, content=l.content) for l in levels],
+            )
+        )
+
+    return DeckWithCards(deck_id=deck.id, title=deck.title, cards=result_cards)
+
+
+@router.get("/{deck_id}/with_cards", response_model=DeckWithCards)
+def get_deck_with_cards(
+    deck_id: UUID,
+    userid: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    link = (
+        db.query(UserStudyGroupDeck)
+        .join(UserStudyGroup)
+        .filter(UserStudyGroup.user_id == userid, UserStudyGroupDeck.deck_id == deck_id)
+        .first()
+    )
+    if not link:
+        raise HTTPException(status_code=404, detail="Deck not found or access denied")
+
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+
+    cards = db.query(Card).filter(Card.deck_id == deck_id).all()
+
+    out_cards = []
+    for c in cards:
+        levels = (
+            db.query(CardLevel)
+            .filter(CardLevel.card_id == c.id)
+            .order_by(CardLevel.level_index.asc())
+            .all()
+        )
+        out_cards.append(
+            CardSummary(
+                card_id=c.id,
+                title=c.title,
+                type=c.type,
+                levels=[CardLevelContent(level_index=l.level_index, content=l.content) for l in levels],
+            )
+        )
+
+    return DeckWithCards(deck_id=deck.id, title=deck.title, cards=out_cards)

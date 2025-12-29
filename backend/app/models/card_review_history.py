@@ -47,9 +47,6 @@ class CardReviewHistory(Base):
 
     interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    # В новой системе можно не использовать, но оставим для совместимости/дебага
-    streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     user = relationship("User", back_populates="review_history")

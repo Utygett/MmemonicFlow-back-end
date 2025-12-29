@@ -15,6 +15,12 @@ from app.models.user_learning_settings import UserLearningSettings
 from app.schemas.card_review import CardForReview, ReviewRequest, ReviewResponse
 from app.schemas.cards import CardForReviewWithLevels, CardLevelContent
 from app.services.review_service import ReviewService
+from app.schemas.cards import CreateCardRequest
+from app.schemas.cards import CreateCardResponse
+from starlette import status
+from app.models import Deck
+from app.schemas.cards import CardSummary
+from app.schemas.cards import ReplaceLevelsRequest
 
 router = APIRouter()
 
@@ -68,6 +74,53 @@ def _ensure_active_progress(db: Session, *, user_id: UUID, card: Card, settings:
     db.refresh(progress)
     return progress
 
+
+@router.post("/", response_model=CreateCardResponse, status_code=status.HTTP_201_CREATED)
+def create_card(
+    payload: CreateCardRequest,
+    userid: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    # 1) deck exists
+    deck = db.query(Deck).filter(Deck.id == payload.deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+
+    # 2) owner-only
+    if deck.owner_id != userid:
+        raise HTTPException(status_code=403, detail="Deck not accessible")  # owner-only
+
+    # 3) validate minimal invariants
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Title is required")
+    if not payload.levels:
+        raise HTTPException(status_code=422, detail="At least 1 level is required")
+
+    # 4) create card (ORM uses deckid/maxlevel) [file:151]
+    card = Card(
+        deck_id=payload.deck_id,
+        title=title,
+        type=payload.type,
+        max_level=len(payload.levels) - 1,
+        settings=None,
+    )
+    db.add(card)
+    db.flush()  # получаем card.id до insert levels
+
+    # 5) create levels (ORM uses cardid/levelindex/content) [file:151]
+    db.add_all([
+        CardLevel(
+            card_id=card.id,
+            level_index=i,
+            content={"question": lvl.question, "answer": lvl.answer},
+        )
+        for i, lvl in enumerate(payload.levels)
+    ])
+
+    db.commit()
+
+    return CreateCardResponse(card_id=card.id, deck_id=payload.deck_id)
 
 @router.get("/review", response_model=list[CardForReview])
 def get_cards_for_review(
@@ -144,7 +197,6 @@ def review_card(
         card_level_id=progress.card_level_id,
         rating=request.rating,
         interval_minutes=int((progress.next_review - progress.last_reviewed).total_seconds() // 60),
-        streak=0,
         reviewed_at=progress.last_reviewed,
     )
     db.add(history_entry)
@@ -346,3 +398,53 @@ def get_cards_for_review_with_levels(
             )
         )
     return result
+
+
+@router.put("/{card_id}/levels", response_model=CardSummary)
+def update_card_levels(
+    card_id: UUID,
+    payload: ReplaceLevelsRequest,
+    userid: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    card = db.get(Card, card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    deck = db.get(Deck, card.deck_id)
+    if not deck or deck.owner_id != userid:
+        raise HTTPException(status_code=403, detail="Deck not accessible")
+
+    existing = (
+        db.query(CardLevel)
+        .filter(CardLevel.card_id == card_id)
+        .order_by(CardLevel.level_index.asc())
+        .all()
+    )
+
+    if not payload.levels:
+        raise HTTPException(status_code=422, detail="At least 1 level is required")
+
+    # Вариант 1 (самый безопасный): строго одинаковое число уровней
+    if len(payload.levels) != len(existing):
+        raise HTTPException(status_code=409, detail="Levels count mismatch")
+
+    for i, lvl in enumerate(payload.levels):
+        q = lvl.question.strip()
+        a = lvl.answer.strip()
+        if not q or not a:
+            raise HTTPException(status_code=422, detail="Level question/answer must be non-empty")
+
+        existing[i].content = {"question": q, "answer": a}
+
+    db.commit()
+
+    return CardSummary(
+        card_id=card.id,
+        title=card.title,
+        type=card.type,
+        levels=[
+            CardLevelContent(level_index=l.level_index, content=l.content)
+            for l in existing
+        ],
+    )

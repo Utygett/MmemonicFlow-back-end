@@ -1,5 +1,6 @@
 """Pytest fixtures - просто и надёжно."""
 import os
+import uuid
 import uuid as uuid_lib
 import warnings
 import logging
@@ -148,3 +149,38 @@ def test_deck(db, test_user: User, user_group: UserStudyGroup) -> Deck:
 @pytest.fixture(scope="function")
 def auth_headers(auth_token: str) -> dict:
     return {"Authorization": f"Bearer {auth_token}"}
+
+
+@pytest.fixture()
+def client():
+    return TestClient(app)
+
+def _unique_email():
+    return f"u{uuid.uuid4().hex[:10]}@example.com"
+
+
+def register_and_login(client: TestClient, password: str = "secret123"):
+    email = _unique_email()
+
+    # register
+    r = client.post("/api/auth/register", json={"email": email, "password": password})
+    assert r.status_code in (200, 201), r.text  # у тебя может быть 200
+    data = r.json()
+
+    # token key может отличаться; делаем устойчиво
+    access_token = data.get("access_token") or data.get("accesstoken")
+    assert access_token, data
+    return email, access_token
+
+def create_deck(client: TestClient, token: str, title: str = "Deck"):
+    r = client.post(
+        "/api/decks/",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"title": title, "description": None, "color": None},
+    )
+    assert r.status_code in (200, 201), r.text
+    d = r.json()
+
+    deck_id = d.get("deck_id") or d.get("deckid")
+    assert deck_id, d
+    return deck_id

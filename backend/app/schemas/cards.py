@@ -76,3 +76,7 @@ class DeckCreate(BaseModel):
     title: str
     description: str | None = None
     color: str | None = None
+
+class CreateCardResponse(BaseModel):
+    card_id: UUID
+    deck_id: UUID
