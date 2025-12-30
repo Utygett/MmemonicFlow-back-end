@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user_id
@@ -448,3 +448,17 @@ def update_card_levels(
             for l in existing
         ],
     )
+
+@router.delete("/{card_id}/progress", status_code=204)
+def delete_card_progress(
+    card_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    (
+        db.query(CardProgress)
+        .filter(CardProgress.user_id == user_id, CardProgress.card_id == card_id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return Response(status_code=204)
