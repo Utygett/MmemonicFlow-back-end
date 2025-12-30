@@ -66,7 +66,7 @@ def _ensure_active_progress(db: Session, *, user_id: UUID, card: Card, settings:
         is_active=True,
         stability=settings.initial_stability,
         difficulty=settings.initial_difficulty,
-        last_reviewed=now,
+        last_reviewed=None,
         next_review=now,
     )
     db.add(progress)

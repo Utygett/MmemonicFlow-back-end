@@ -5,6 +5,8 @@ from app.core.enums import ReviewRating
 from .entities import CardLevelProgressState
 from .dto import LearningSettingsSnapshot
 
+FIRST_AGAIN_MINUTES = 5
+
 class ReviewPolicy:
     STABILITY_MULT = {
         ReviewRating.again: 0.25,
@@ -31,7 +33,10 @@ class ReviewPolicy:
         new_difficulty = min(10.0, max(1.0, state.difficulty + self.DIFFICULTY_DELTA[rating]))
         new_stability = max(0.0035, state.stability * self.STABILITY_MULT[rating])  # >= 5 минут (в днях)
 
-        next_review = now + timedelta(days=new_stability)
+        if rating == ReviewRating.again and state.last_reviewed is None:
+            next_review = now + timedelta(minutes=FIRST_AGAIN_MINUTES)
+        else:
+            next_review = now + timedelta(days=new_stability)
 
         return replace(
             state,
