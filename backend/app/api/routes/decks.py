@@ -302,3 +302,29 @@ def get_deck_with_cards(
         )
 
     return DeckWithCards(deck_id=deck.id, title=deck.title, cards=out_cards)
+
+@router.delete("/{deck_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_deck(
+    deck_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    deck = db.get(Deck, deck_id)
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+
+    if str(deck.owner_id) != str(user_id):
+        raise HTTPException(status_code=403, detail="You are not the owner of this deck")
+
+    # Удаляем все привязки колоды к user-группам (иначе FK может мешать)
+    db.query(UserStudyGroupDeck).filter(UserStudyGroupDeck.deck_id == deck_id).delete(
+        synchronize_session=False
+    )
+
+    # Удаляем карточки колоды (а дальше БД каскадом удалит уровни/прогресс/историю)
+    db.query(Card).filter(Card.deck_id == deck_id).delete(synchronize_session=False)
+
+    # Удаляем саму колоду
+    db.delete(deck)
+    db.commit()
+    return

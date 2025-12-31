@@ -1,5 +1,6 @@
 # backend/app/api/routes/cards.py
 from datetime import datetime, timezone
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -462,3 +463,61 @@ def delete_card_progress(
     )
     db.commit()
     return Response(status_code=204)
+
+@router.delete("/{card_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_card(card_id: UUID, user_id: UUID = Depends(get_current_user_id), db: Session = Depends(get_db)):
+    card = db.get(Card, card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    deck = db.get(Deck, card.deck_id)
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+
+    if deck.owner_id != user_id:
+        raise HTTPException(status_code=403, detail="You are not the owner of this card")
+
+    db.delete(card)
+    db.commit()
+
+
+@router.patch("/{card_id}", response_model=CardSummary)
+def update_card(
+        card_id: UUID,
+        title: Optional[str] = None,  # будет приходить как query ?title=...
+        user_id: UUID = Depends(get_current_user_id),
+        db: Session = Depends(get_db),
+):
+    card = db.get(Card, card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    deck = db.get(Deck, card.deck_id)
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+
+    if deck.owner_id != user_id:
+        raise HTTPException(status_code=403, detail="Card not accessible")
+
+    if title is not None:
+        t = title.strip()
+        if not t:
+            raise HTTPException(status_code=422, detail="Title is required")
+        card.title = t
+
+    db.commit()
+    db.refresh(card)
+
+    levels = (
+        db.query(CardLevel)
+        .filter(CardLevel.card_id == card.id)
+        .order_by(CardLevel.level_index.asc())
+        .all()
+    )
+
+    return CardSummary(
+        card_id=card.id,
+        title=card.title,
+        type=card.type,
+        levels=[CardLevelContent(level_index=l.level_index, content=l.content) for l in levels],
+    )
