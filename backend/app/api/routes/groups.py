@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from uuid import UUID
 
@@ -182,3 +183,89 @@ def get_group_decks(group_id: UUID, user_id: UUID = Depends(get_current_user_id)
         )
 
     return result
+
+
+@router.put(
+    "/{group_id}/decks/{deck_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def add_deck_to_group(
+    group_id: UUID,
+    deck_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    # 1) Group access: group_id is StudyGroup.id, resolve user's UserStudyGroup by sourcegroupid
+    user_group = (
+        db.query(UserStudyGroup)
+        .filter(UserStudyGroup.user_id == user_id, UserStudyGroup.source_group_id == group_id)
+        .first()
+    )
+    if not user_group:
+        raise HTTPException(status_code=404, detail="Group not found or access denied")
+
+    # 2) Deck exists + access (public OR owned by current user)
+    deck = db.get(Deck, deck_id)
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+
+    if (not deck.is_public) and (deck.owner_id != user_id):
+        raise HTTPException(status_code=403, detail="Deck not accessible")
+
+    # 3) Idempotent link creation
+    existing = (
+        db.query(UserStudyGroupDeck)
+        .filter(
+            UserStudyGroupDeck.user_group_id == user_group.id,
+            UserStudyGroupDeck.deck_id == deck_id,
+        )
+        .first()
+    )
+    if existing:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    link = UserStudyGroupDeck(usergroupid=user_group.id, deckid=deck_id, orderindex=0)
+    db.add(link)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        # race: another request created the same PK (user_group_id, deck_id)
+        db.rollback()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete(
+    "/{group_id}/decks/{deck_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_deck_from_group(
+    group_id: UUID,
+    deck_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    # 1) Group access
+    user_group = (
+        db.query(UserStudyGroup)
+        .filter(UserStudyGroup.user_id == user_id, UserStudyGroup.source_group_id == group_id)
+        .first()
+    )
+    if not user_group:
+        raise HTTPException(status_code=404, detail="Group not found or access denied")
+
+    # 2) Delete link only (do not delete Deck)
+    link = (
+        db.query(UserStudyGroupDeck)
+        .filter(
+            UserStudyGroupDeck.user_group_id == user_group.id,
+            UserStudyGroupDeck.deck_id == deck_id,
+        )
+        .first()
+    )
+    if link:
+        db.delete(link)
+        db.commit()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

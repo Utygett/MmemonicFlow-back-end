@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy import asc
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from app.db.session import SessionLocal
 from app.auth.dependencies import get_current_user_id
@@ -19,6 +20,8 @@ from app.models.user_study_group import UserStudyGroup
 from app.models.user_study_group_deck import UserStudyGroupDeck
 
 from app.schemas.cards import DeckWithCards
+
+from app.schemas.decks_public import PublicDeckSummary
 
 router = APIRouter(tags=["decks"])
 
@@ -328,3 +331,33 @@ def delete_deck(
     db.delete(deck)
     db.commit()
     return
+
+
+@router.get("/public", response_model=List[PublicDeckSummary])
+def search_public_decks(
+    q: Optional[str] = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Deck).filter(Deck.ispublic == True)
+
+    if q is not None and q.strip():
+        query = query.filter(Deck.title.ilike(f"%{q.strip()}%"))
+
+    decks = (
+        query.order_by(asc(Deck.title), asc(Deck.id))
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [
+        PublicDeckSummary(
+            deck_id=d.id,
+            title=d.title,
+            description=d.description,
+            color=d.color,
+            owner_id=d.owner_id,
+        )
+        for d in decks
+    ]

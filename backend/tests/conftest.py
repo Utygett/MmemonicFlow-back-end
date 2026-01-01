@@ -15,7 +15,7 @@ for logger_name in ("sqlalchemy", "sqlalchemy.engine", "sqlalchemy.pool", "sqlal
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-os.environ["DATABASE_URL"] = "postgresql+psycopg2://flashcards_user:flashcards_pass@localhost:5433/flashcards"
+os.environ["DATABASE_URL"] = "postgresql+psycopg2://flashcards_user:flashcards_pass@localhost:15433/flashcards"
 
 from app.main import app
 from app.db.session import SessionLocal
