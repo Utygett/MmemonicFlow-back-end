@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+psycopg2://flashcards_user:flashcards_pass@db:5432/flashcards",
+    "postgresql+psycopg2://flashcards_user:flashcards_pass@localhost:15433/flashcards",
 )
 
 engine = create_engine(DATABASE_URL, echo=True)

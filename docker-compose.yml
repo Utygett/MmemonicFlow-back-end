@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: flashcards_pass
       POSTGRES_DB: flashcards
     ports:
-      - "5433:5432"
+      - "15433:5432"
     volumes:
       - flashcards_data:/var/lib/postgresql/data
 
