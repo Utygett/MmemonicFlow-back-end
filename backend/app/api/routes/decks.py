@@ -405,7 +405,7 @@ def update_deck(
     db.refresh(deck)
 
     return DeckDetail(
-        deck_id=deck.id,
+        id=deck.id,
         title=deck.title,
         description=deck.description,
         color=deck.color,

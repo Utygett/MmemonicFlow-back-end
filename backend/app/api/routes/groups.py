@@ -334,7 +334,7 @@ def get_group_decks_summary(
 
     deck_by_id = {d.id: d for d in decks}
     return [
-        DeckDetail(deck_id=did,
+        DeckDetail(id=did,
                    title=deck_by_id[did].title,
                    description=deck_by_id[did].description,
                    owner_id=deck_by_id[did].owner_id,
