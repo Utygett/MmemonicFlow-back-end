@@ -45,6 +45,42 @@ def _ensure_settings(db: Session, user_id: UUID) -> UserLearningSettings:
     return s
 
 
+
+
+
+
+
+
+@router.get("/public", response_model=List[PublicDeckSummary])
+def search_public_decks(
+    q: Optional[str] = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Deck).filter(Deck.is_public == True)
+
+    if q is not None and q.strip():
+        query = query.filter(Deck.title.ilike(f"%{q.strip()}%"))
+
+    decks = (
+        query.order_by(asc(Deck.title), asc(Deck.id))
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [
+        PublicDeckSummary(
+            deck_id=d.id,
+            title=d.title,
+            description=d.description,
+            color=d.color,
+            owner_id=d.owner_id,
+        )
+        for d in decks
+    ]
+
+
 @router.get("/", response_model=List[DeckSummary])
 def list_user_decks(user_id: UUID = Depends(get_current_user_id), db: Session = Depends(get_db)):
     user_uuid = user_id
@@ -331,33 +367,3 @@ def delete_deck(
     db.delete(deck)
     db.commit()
     return
-
-
-@router.get("/public", response_model=List[PublicDeckSummary])
-def search_public_decks(
-    q: Optional[str] = Query(default=None),
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
-):
-    query = db.query(Deck).filter(Deck.ispublic == True)
-
-    if q is not None and q.strip():
-        query = query.filter(Deck.title.ilike(f"%{q.strip()}%"))
-
-    decks = (
-        query.order_by(asc(Deck.title), asc(Deck.id))
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
-    return [
-        PublicDeckSummary(
-            deck_id=d.id,
-            title=d.title,
-            description=d.description,
-            color=d.color,
-            owner_id=d.owner_id,
-        )
-        for d in decks
-    ]

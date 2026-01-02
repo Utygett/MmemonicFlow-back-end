@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
@@ -12,8 +13,12 @@ from app.schemas.cards import DeckWithCards, CardSummary
 from app.models.user_study_group_deck import UserStudyGroupDeck
 from app.models.deck import Deck
 from app.models.card import Card
-
 from app.auth.dependencies import get_current_user_id
+from app.schemas.cards import DeckSummary
+
+from app.schemas.group import UserGroupResponse, GroupKind
+
+from app.models import StudyGroupDeck
 
 router = APIRouter()
 
@@ -63,23 +68,43 @@ def create_group(group_data: GroupCreate, user_id: UUID = Depends(get_current_us
 # -------------------------------
 # Получить список групп пользователя
 # -------------------------------
-@router.get("/", response_model=List[GroupResponse])
-def list_groups(user_id: UUID = Depends(get_current_user_id), db: Session = Depends(get_db)):
-    groups = (
-        db.query(StudyGroup)
-        .join(UserStudyGroup, UserStudyGroup.source_group_id == StudyGroup.id)
+@router.get("/", response_model=List[UserGroupResponse])
+def list_groups(
+    user_id: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(UserStudyGroup, StudyGroup)
+        .outerjoin(StudyGroup, UserStudyGroup.source_group_id == StudyGroup.id)
         .filter(UserStudyGroup.user_id == user_id)
         .all()
     )
-    return [
-        GroupResponse(
-            id=g.id,
-            title=g.title,
-            description=g.description,
-            parent_id=g.parent_id
+
+    out: List[UserGroupResponse] = []
+    for ug, sg in rows:
+        is_subscription = ug.source_group_id is not None
+
+        kind = GroupKind.subscription if is_subscription else GroupKind.personal
+
+        title = ug.title_override
+        if not title:
+            title = sg.title if sg else "Мои колоды"
+
+        out.append(
+            UserGroupResponse(
+                user_group_id=ug.id,
+                kind=kind,
+                source_group_id=ug.source_group_id,
+
+                title=title,
+                description=(sg.description if sg else None),
+
+                # parent_id — из UserStudyGroup (пользовательская иерархия)
+                parent_id=ug.parent_id,
+            )
         )
-        for g in groups
-    ]
+
+    return out
 
 # -------------------------------
 # Получить конкретную группу
@@ -185,87 +210,131 @@ def get_group_decks(group_id: UUID, user_id: UUID = Depends(get_current_user_id)
     return result
 
 
-@router.put(
-    "/{group_id}/decks/{deck_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-def add_deck_to_group(
-    group_id: UUID,
+@router.put("/{user_group_id}/decks/{deck_id}", status_code=204)
+def add_deck_to_user_group(
+    user_group_id: UUID,
     deck_id: UUID,
     user_id: UUID = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    # 1) Group access: group_id is StudyGroup.id, resolve user's UserStudyGroup by sourcegroupid
-    user_group = (
+    ug = (
         db.query(UserStudyGroup)
-        .filter(UserStudyGroup.user_id == user_id, UserStudyGroup.source_group_id == group_id)
+        .filter(UserStudyGroup.id == user_group_id,
+                UserStudyGroup.user_id == user_id)
         .first()
     )
-    if not user_group:
-        raise HTTPException(status_code=404, detail="Group not found or access denied")
+    if not ug:
+        raise HTTPException(404, "Group not found or access denied")
 
-    # 2) Deck exists + access (public OR owned by current user)
-    deck = db.get(Deck, deck_id)
+    if ug.source_group_id is not None:
+        raise HTTPException(403, "Cannot modify subscription group")
+
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:
-        raise HTTPException(status_code=404, detail="Deck not found")
+        raise HTTPException(404, "Deck not found")
 
-    if (not deck.is_public) and (deck.owner_id != user_id):
-        raise HTTPException(status_code=403, detail="Deck not accessible")
+    if deck.owner_id != user_id and not deck.is_public:
+        raise HTTPException(403, "Deck not accessible")
 
-    # 3) Idempotent link creation
     existing = (
         db.query(UserStudyGroupDeck)
-        .filter(
-            UserStudyGroupDeck.user_group_id == user_group.id,
-            UserStudyGroupDeck.deck_id == deck_id,
-        )
+        .filter(UserStudyGroupDeck.user_group_id == ug.id,
+                UserStudyGroupDeck.deck_id == deck_id)
         .first()
     )
     if existing:
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
+        return  # уже добавлена
 
-    link = UserStudyGroupDeck(usergroupid=user_group.id, deckid=deck_id, orderindex=0)
-    db.add(link)
+    # orderindex: либо max+1, либо 0 если пусто
+    max_order = (
+        db.query(func.max(UserStudyGroupDeck.order_index))
+        .filter(UserStudyGroupDeck.user_group_id == ug.id)
+        .scalar()
+    ) or 0
 
-    try:
-        db.commit()
-    except IntegrityError:
-        # race: another request created the same PK (user_group_id, deck_id)
-        db.rollback()
-
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
+    db.add(UserStudyGroupDeck(user_group_id=ug.id, deck_id=deck_id, order_index=max_order + 1))
+    db.commit()
 
 @router.delete(
-    "/{group_id}/decks/{deck_id}",
+    "/{user_group_id}/decks/{deck_id:uuid}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def remove_deck_from_group(
-    group_id: UUID,
+    user_group_id: UUID,
     deck_id: UUID,
     user_id: UUID = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    # 1) Group access
-    user_group = (
+    ug = (
         db.query(UserStudyGroup)
-        .filter(UserStudyGroup.user_id == user_id, UserStudyGroup.source_group_id == group_id)
+        .filter(UserStudyGroup.id == user_group_id, UserStudyGroup.user_id == user_id)
         .first()
     )
-    if not user_group:
-        raise HTTPException(status_code=404, detail="Group not found or access denied")
+    if not ug:
+        raise HTTPException(404, "Group not found or access denied")
 
-    # 2) Delete link only (do not delete Deck)
-    link = (
+    if ug.source_group_id is not None:
+        raise HTTPException(403, "Cannot modify subscription group")
+
+    deleted = (
         db.query(UserStudyGroupDeck)
         .filter(
-            UserStudyGroupDeck.user_group_id == user_group.id,
+            UserStudyGroupDeck.user_group_id == ug.id,
             UserStudyGroupDeck.deck_id == deck_id,
         )
-        .first()
+        .delete(synchronize_session=False)
     )
-    if link:
-        db.delete(link)
-        db.commit()
+    db.commit()
+
+    if deleted == 0:
+        raise HTTPException(404, "Deck link not found")
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+@router.get("/{user_group_id}/decks/summary", response_model=List[DeckSummary])
+def get_group_decks_summary(
+    user_group_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    ug = (
+        db.query(UserStudyGroup)
+        .filter(UserStudyGroup.id == user_group_id, UserStudyGroup.user_id == user_id)
+        .first()
+    )
+    if not ug:
+        raise HTTPException(status_code=404, detail="Group not found or access denied")
+
+    deck_ids: List[UUID]
+
+    # Личная папка
+    if ug.source_group_id is None:
+        links = (
+            db.query(UserStudyGroupDeck)
+            .filter(UserStudyGroupDeck.user_group_id == ug.id)
+            .order_by(UserStudyGroupDeck.order_index.asc())
+            .all()
+        )
+        deck_ids = [l.deck_id for l in links]
+
+    # Подписка на общую группу
+    else:
+        links = (
+            db.query(StudyGroupDeck)
+            .filter(StudyGroupDeck.group_id == ug.source_group_id)
+            .order_by(StudyGroupDeck.order_index.asc())
+            .all()
+        )
+        deck_ids = [l.deck_id for l in links]
+
+    if not deck_ids:
+        return []
+
+    decks = db.query(Deck).filter(Deck.id.in_(deck_ids)).all()
+
+    deck_by_id = {d.id: d for d in decks}
+    return [
+        DeckSummary(deck_id=did, title=deck_by_id[did].title)
+        for did in deck_ids
+        if did in deck_by_id
+    ]
