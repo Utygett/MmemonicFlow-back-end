@@ -296,19 +296,19 @@ def get_deck_with_cards(
             )
         )
 
-    return DeckWithCards(deck_id=deck.id, title=deck.title, cards=result_cards)
+    return DeckWithCards(deck=deck, cards=result_cards)
 
 
 @router.get("/{deck_id}/with_cards", response_model=DeckWithCards)
 def get_deck_with_cards(
     deck_id: UUID,
-    userid: UUID = Depends(get_current_user_id),
+    user_id: UUID = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     link = (
         db.query(UserStudyGroupDeck)
         .join(UserStudyGroup)
-        .filter(UserStudyGroup.user_id == userid, UserStudyGroupDeck.deck_id == deck_id)
+        .filter(UserStudyGroup.user_id == user_id, UserStudyGroupDeck.deck_id == deck_id)
         .first()
     )
     if not link:
@@ -337,7 +337,7 @@ def get_deck_with_cards(
             )
         )
 
-    return DeckWithCards(deck_id=deck.id, title=deck.title, cards=out_cards)
+    return DeckWithCards(deck=deck, cards=out_cards)
 
 @router.delete("/{deck_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_deck(

@@ -14,11 +14,12 @@ from app.models.user_study_group_deck import UserStudyGroupDeck
 from app.models.deck import Deck
 from app.models.card import Card
 from app.auth.dependencies import get_current_user_id
-from app.schemas.cards import DeckSummary
 
 from app.schemas.group import UserGroupResponse, GroupKind
 
 from app.models import StudyGroupDeck
+
+from app.schemas.cards import DeckDetail
 
 router = APIRouter()
 
@@ -201,8 +202,7 @@ def get_group_decks(group_id: UUID, user_id: UUID = Depends(get_current_user_id)
 
         result.append(
             DeckWithCards(
-                deck_id=deck.id,
-                title=deck.title,
+                deck=deck,
                 cards=cards_summary
             )
         )
@@ -291,7 +291,7 @@ def remove_deck_from_group(
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-@router.get("/{user_group_id}/decks/summary", response_model=List[DeckSummary])
+@router.get("/{user_group_id}/decks/summary", response_model=List[DeckDetail])
 def get_group_decks_summary(
     user_group_id: UUID,
     user_id: UUID = Depends(get_current_user_id),
@@ -334,7 +334,12 @@ def get_group_decks_summary(
 
     deck_by_id = {d.id: d for d in decks}
     return [
-        DeckSummary(deck_id=did, title=deck_by_id[did].title)
+        DeckDetail(deck_id=did,
+                   title=deck_by_id[did].title,
+                   description=deck_by_id[did].description,
+                   owner_id=deck_by_id[did].owner_id,
+                   color=deck_by_id[did].color,
+                   is_public = deck_by_id[did].is_public)
         for did in deck_ids
         if did in deck_by_id
     ]

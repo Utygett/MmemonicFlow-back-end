@@ -49,15 +49,10 @@ class ReplaceLevelsRequest(BaseModel):
     levels: List[CardLevelPayload]
 
 
-class DeckWithCards(BaseModel):
-    deck_id: UUID
-    title: str
-    cards: List[CardSummary]
-
-
 class DeckSummary(BaseModel):
     deck_id: UUID
     title: str
+    description: str | None = None
 
 
 class DeckSessionCard(BaseModel):
@@ -89,7 +84,7 @@ class DeckUpdate(BaseModel):
     is_public: Optional[bool] = None
 
 class DeckDetail(BaseModel):
-    deck_id: UUID
+    deck_id: UUID = Field(validation_alias="id", serialization_alias="deck_id")
     title: str
     description: Optional[str] = None
     color: str
@@ -97,3 +92,8 @@ class DeckDetail(BaseModel):
     is_public: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DeckWithCards(BaseModel):
+    deck: DeckDetail
+    cards: List[CardSummary]
