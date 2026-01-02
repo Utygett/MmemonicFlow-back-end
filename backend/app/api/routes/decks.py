@@ -8,20 +8,17 @@ from typing import List, Optional
 
 from app.db.session import SessionLocal
 from app.auth.dependencies import get_current_user_id
-
 from app.models.deck import Deck
 from app.models.card import Card
 from app.models.card_level import CardLevel
 from app.models.card_progress import CardProgress
 from app.models.user_learning_settings import UserLearningSettings
-
 from app.schemas.cards import DeckSummary, CardSummary, CardLevelContent, DeckSessionCard, DeckCreate
 from app.models.user_study_group import UserStudyGroup
 from app.models.user_study_group_deck import UserStudyGroupDeck
-
 from app.schemas.cards import DeckWithCards
-
 from app.schemas.decks_public import PublicDeckSummary
+from app.schemas.cards import DeckDetail, DeckUpdate
 
 router = APIRouter(tags=["decks"])
 
@@ -367,3 +364,51 @@ def delete_deck(
     db.delete(deck)
     db.commit()
     return
+
+
+@router.patch(
+    "/{deck_id:uuid}",
+    response_model=DeckDetail,
+)
+def update_deck(
+    deck_id: UUID,
+    payload: DeckUpdate,
+    user_id: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+
+    if deck.owner_id != user_id:
+        raise HTTPException(status_code=403, detail="Deck not accessible")
+
+    if payload.title is not None:
+        t = payload.title.strip()
+        if not t:
+            raise HTTPException(status_code=422, detail="Title is required")
+        deck.title = t
+
+    if payload.description is not None:
+        deck.description = payload.description.strip() if payload.description is not None else None
+
+    if payload.color is not None:
+        c = payload.color.strip()
+        if not c:
+            raise HTTPException(status_code=422, detail="Color is required")
+        deck.color = c
+
+    if payload.is_public is not None:
+        deck.is_public = payload.is_public
+
+    db.commit()
+    db.refresh(deck)
+
+    return DeckDetail(
+        deck_id=deck.id,
+        title=deck.title,
+        description=deck.description,
+        color=deck.color,
+        owner_id=deck.owner_id,
+        is_public=deck.is_public,
+    )

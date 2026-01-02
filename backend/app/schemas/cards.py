@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Dict, Optional
 from uuid import UUID
 from datetime import datetime
@@ -80,3 +80,20 @@ class DeckCreate(BaseModel):
 class CreateCardResponse(BaseModel):
     card_id: UUID
     deck_id: UUID
+
+
+class DeckUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = Field(default=None, min_length=1)  # опционально: regex под HEX
+    is_public: Optional[bool] = None
+
+class DeckDetail(BaseModel):
+    deck_id: UUID
+    title: str
+    description: Optional[str] = None
+    color: str
+    owner_id: UUID
+    is_public: bool
+
+    model_config = ConfigDict(from_attributes=True)
