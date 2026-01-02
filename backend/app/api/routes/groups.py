@@ -210,7 +210,19 @@ def get_group_decks(group_id: UUID, user_id: UUID = Depends(get_current_user_id)
     return result
 
 
-@router.put("/{user_group_id}/decks/{deck_id}", status_code=204)
+def assert_group_is_modifiable(ug: UserStudyGroup, user_id: UUID, db: Session) -> None:
+    # personal group (source_group_id is NULL) — всегда модифицируемая
+    if ug.source_group_id is None:
+        return
+
+    # иначе это "группа на базе StudyGroup"; модифицировать можно только владельцу StudyGroup
+    sg = db.query(StudyGroup).filter(StudyGroup.id == ug.source_group_id).first()
+    if not sg:
+        raise HTTPException(404, "Source group not found")
+    if sg.owner_id != user_id:
+        raise HTTPException(403, "Cannot modify subscription group")
+
+@router.put("/{user_group_id}/decks/{deck_id:uuid}", status_code=204)
 def add_deck_to_user_group(
     user_group_id: UUID,
     deck_id: UUID,
@@ -219,15 +231,13 @@ def add_deck_to_user_group(
 ):
     ug = (
         db.query(UserStudyGroup)
-        .filter(UserStudyGroup.id == user_group_id,
-                UserStudyGroup.user_id == user_id)
+        .filter(UserStudyGroup.id == user_group_id, UserStudyGroup.user_id == user_id)
         .first()
     )
     if not ug:
         raise HTTPException(404, "Group not found or access denied")
 
-    if ug.source_group_id is not None:
-        raise HTTPException(403, "Cannot modify subscription group")
+    assert_group_is_modifiable(ug, user_id, db)
 
     deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:
@@ -238,27 +248,23 @@ def add_deck_to_user_group(
 
     existing = (
         db.query(UserStudyGroupDeck)
-        .filter(UserStudyGroupDeck.user_group_id == ug.id,
-                UserStudyGroupDeck.deck_id == deck_id)
+        .filter(UserStudyGroupDeck.user_group_id == ug.id, UserStudyGroupDeck.deck_id == deck_id)
         .first()
     )
     if existing:
-        return  # уже добавлена
+        return
 
-    # orderindex: либо max+1, либо 0 если пусто
     max_order = (
         db.query(func.max(UserStudyGroupDeck.order_index))
         .filter(UserStudyGroupDeck.user_group_id == ug.id)
         .scalar()
-    ) or 0
+    )
+    next_order = (max_order + 1) if max_order is not None else 0
 
-    db.add(UserStudyGroupDeck(user_group_id=ug.id, deck_id=deck_id, order_index=max_order + 1))
+    db.add(UserStudyGroupDeck(user_group_id=ug.id, deck_id=deck_id, order_index=next_order))
     db.commit()
 
-@router.delete(
-    "/{user_group_id}/decks/{deck_id:uuid}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
+@router.delete("/{user_group_id}/decks/{deck_id:uuid}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_deck_from_group(
     user_group_id: UUID,
     deck_id: UUID,
@@ -273,15 +279,11 @@ def remove_deck_from_group(
     if not ug:
         raise HTTPException(404, "Group not found or access denied")
 
-    if ug.source_group_id is not None:
-        raise HTTPException(403, "Cannot modify subscription group")
+    assert_group_is_modifiable(ug, user_id, db)
 
     deleted = (
         db.query(UserStudyGroupDeck)
-        .filter(
-            UserStudyGroupDeck.user_group_id == ug.id,
-            UserStudyGroupDeck.deck_id == deck_id,
-        )
+        .filter(UserStudyGroupDeck.user_group_id == ug.id, UserStudyGroupDeck.deck_id == deck_id)
         .delete(synchronize_session=False)
     )
     db.commit()
@@ -303,43 +305,21 @@ def get_group_decks_summary(
         .first()
     )
     if not ug:
-        raise HTTPException(status_code=404, detail="Group not found or access denied")
+        raise HTTPException(404, "Group not found or access denied")
 
-    deck_ids: List[UUID]
-
-    # Личная папка
-    if ug.source_group_id is None:
-        links = (
-            db.query(UserStudyGroupDeck)
-            .filter(UserStudyGroupDeck.user_group_id == ug.id)
-            .order_by(UserStudyGroupDeck.order_index.asc())
-            .all()
-        )
-        deck_ids = [l.deck_id for l in links]
-
-    # Подписка на общую группу
-    else:
-        links = (
-            db.query(StudyGroupDeck)
-            .filter(StudyGroupDeck.group_id == ug.source_group_id)
-            .order_by(StudyGroupDeck.order_index.asc())
-            .all()
-        )
-        deck_ids = [l.deck_id for l in links]
-
+    # читать summary можно и для subscription-группы, но колоды всё равно лежат в UserStudyGroupDeck
+    links = (
+        db.query(UserStudyGroupDeck)
+        .filter(UserStudyGroupDeck.user_group_id == ug.id)
+        .order_by(UserStudyGroupDeck.order_index.asc())
+        .all()
+    )
+    deck_ids = [l.deck_id for l in links]
     if not deck_ids:
         return []
 
     decks = db.query(Deck).filter(Deck.id.in_(deck_ids)).all()
-
     deck_by_id = {d.id: d for d in decks}
-    return [
-        DeckDetail(id=did,
-                   title=deck_by_id[did].title,
-                   description=deck_by_id[did].description,
-                   owner_id=deck_by_id[did].owner_id,
-                   color=deck_by_id[did].color,
-                   is_public = deck_by_id[did].is_public)
-        for did in deck_ids
-        if did in deck_by_id
-    ]
+
+    # Важно: DeckDetail должен уметь принимать ORM Deck (ownerid/ispublic/id и т.д.)
+    return [DeckDetail.model_validate(deck_by_id[did]) for did in deck_ids if did in deck_by_id]
