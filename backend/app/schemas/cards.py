@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, conint
 from typing import List, Dict, Optional
 from uuid import UUID
 from datetime import datetime
@@ -38,11 +38,27 @@ class CardLevelPayload(BaseModel):
     answer: str
 
 
+class CreateCardLevelOption(BaseModel):
+    id: str
+    text: str
+
+class CreateCardLevelRequest(BaseModel):
+    question: str
+
+    # flashcard
+    answer: Optional[str] = None
+
+    # multiple_choice
+    options: Optional[List[CreateCardLevelOption]] = None
+    correctOptionId: Optional[str] = None
+    explanation: Optional[str] = None
+    timerSec: Optional[conint(ge=1, le=3600)] = None
+
 class CreateCardRequest(BaseModel):
-    deck_id: UUID
+    deck_id: str
     title: str
-    type: str
-    levels: List[CardLevelPayload]
+    type: str  # или Literal["flashcard","multiple_choice"], если уже готов
+    levels: List[CreateCardLevelRequest]
 
 
 class ReplaceLevelsRequest(BaseModel):

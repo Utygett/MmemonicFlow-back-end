@@ -109,15 +109,65 @@ def create_card(
     db.add(card)
     db.flush()  # получаем card.id до insert levels
 
-    # 5) create levels (ORM uses cardid/levelindex/content) [file:151]
-    db.add_all([
-        CardLevel(
-            card_id=card.id,
-            level_index=i,
-            content={"question": lvl.question, "answer": lvl.answer},
+    # 5) create levels (ORM uses cardid/levelindex/content)
+    levels_to_add = []
+
+    for i, lvl in enumerate(payload.levels):
+        q = (lvl.question or "").strip()
+        if not q:
+            raise HTTPException(status_code=422, detail=f"Level {i + 1}: question is required")
+
+        if payload.type == "flashcard":
+            a = (lvl.answer or "").strip()
+            if not a:
+                raise HTTPException(status_code=422, detail=f"Level {i + 1}: answer is required for flashcard")
+
+            content = {"question": q, "answer": a}
+
+        elif payload.type == "multiple_choice":
+            options = lvl.options or []
+            if len(options) < 2:
+                raise HTTPException(status_code=422, detail=f"Level {i + 1}: at least 2 options required")
+
+            # trim option texts
+            options_norm = [{"id": o.id, "text": (o.text or "").strip()} for o in options]
+            non_empty = [o for o in options_norm if o["text"]]
+            if len(non_empty) < 2:
+                raise HTTPException(status_code=422, detail=f"Level {i + 1}: at least 2 non-empty options required")
+
+            correct_id = (lvl.correctOptionId or "").strip()
+            if not correct_id:
+                raise HTTPException(status_code=422, detail=f"Level {i + 1}: correctOptionId is required")
+
+            correct = next((o for o in options_norm if o["id"] == correct_id), None)
+            if not correct or not correct["text"]:
+                raise HTTPException(status_code=422,
+                                    detail=f"Level {i + 1}: correctOptionId must point to a non-empty option")
+
+            timer = lvl.timerSec
+            if timer is not None and (timer < 1 or timer > 3600):
+                raise HTTPException(status_code=422, detail=f"Level {i + 1}: timerSec must be 1..3600")
+
+            content = {
+                "question": q,
+                "options": options_norm,
+                "correctOptionId": correct_id,
+                "explanation": (lvl.explanation or "").strip() or None,
+                "timerSec": timer,
+            }
+
+        else:
+            raise HTTPException(status_code=422, detail=f"Unsupported card type: {payload.type}")
+
+        levels_to_add.append(
+            CardLevel(
+                card_id=card.id,
+                level_index=i,
+                content=content,
+            )
         )
-        for i, lvl in enumerate(payload.levels)
-    ])
+
+    db.add_all(levels_to_add)
 
     db.commit()
 
