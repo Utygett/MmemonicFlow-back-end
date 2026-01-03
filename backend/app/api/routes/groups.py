@@ -60,7 +60,7 @@ def create_group(group_data: GroupCreate, user_id: UUID = Depends(get_current_us
     db.refresh(user_group)
 
     return GroupResponse(
-        id=group.id,
+        id=user_group.id,  #Временно возвращаю айди юзер группы так как поиск по айди основной группы ничего хорошего не выдает
         title=group.title,
         description=group.description,
         parent_id=group.parent_id
@@ -156,18 +156,59 @@ def update_group(group_id: UUID, data: GroupUpdate, user_id: UUID = Depends(get_
 # -------------------------------
 # Удалить группу
 # -------------------------------
-@router.delete("/{group_id}")
-def delete_group(group_id: UUID, user_id: UUID = Depends(get_current_user_id), db: Session = Depends(get_db)):
-    group = db.query(StudyGroup).filter(StudyGroup.id == group_id, StudyGroup.owner_id == user_id).first()
-    if not group:
+@router.delete("/{user_group_id:uuid}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_group(
+    user_group_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    ug = (
+        db.query(UserStudyGroup)
+        .filter(UserStudyGroup.id == user_group_id,
+                UserStudyGroup.user_id == user_id)
+        .first()
+    )
+    if not ug:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    # Сначала удаляем связь пользователя
-    db.query(UserStudyGroup).filter(UserStudyGroup.source_group_id == group.id, UserStudyGroup.user_id == user_id).delete()
-    db.delete(group)
-    db.commit()
+    # Всегда чистим user-space links на колоды
+    db.query(UserStudyGroupDeck).filter(
+        UserStudyGroupDeck.user_group_id == ug.id
+    ).delete(synchronize_session=False)
 
-    return {"status": "deleted"}
+    # 1) Личная группа: source_group_id is NULL
+    if ug.source_group_id is None:
+        db.delete(ug)
+        db.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # 2) Группа на базе StudyGroup
+    sg = db.query(StudyGroup).filter(StudyGroup.id == ug.source_group_id).first()
+    if not sg:
+        raise HTTPException(status_code=404, detail="Source group not found")
+
+    if sg.is_system:
+        raise HTTPException(status_code=403, detail="Cannot delete system group")
+
+    if sg.owner_id != user_id:
+        raise HTTPException(status_code=403, detail="Cannot delete чужую группу")
+
+    # Важно: удалить ВСЕ user-группы, которые ссылаются на эту StudyGroup (иначе FK violation)
+    other_ugs = db.query(UserStudyGroup).filter(UserStudyGroup.source_group_id == sg.id).all()
+    other_ug_ids = [x.id for x in other_ugs]
+
+    if other_ug_ids:
+        db.query(UserStudyGroupDeck).filter(
+            UserStudyGroupDeck.user_group_id.in_(other_ug_ids)
+        ).delete(synchronize_session=False)
+
+    db.query(UserStudyGroup).filter(
+        UserStudyGroup.source_group_id == sg.id
+    ).delete(synchronize_session=False)
+
+    db.delete(sg)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 # -------------------------------
 # Получить колоды группы вместе с карточками
