@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field, ConfigDict, conint
-from typing import List, Dict, Optional
+from pydantic import BaseModel, Field, ConfigDict, conint, root_validator
+from typing import List, Dict, Optional, Union, Any
 from uuid import UUID
 from datetime import datetime
 
@@ -61,8 +61,55 @@ class CreateCardRequest(BaseModel):
     levels: List[CreateCardLevelRequest]
 
 
+class QaContentIn(BaseModel):
+    question: str
+    answer: str
+
+
+class McqOptionIn(BaseModel):
+    id: str
+    text: str
+
+
+class McqContentIn(BaseModel):
+    question: str
+    options: List[McqOptionIn]
+    correctOptionId: str
+    explanation: str = ""
+    timerSec: conint(ge=0) = 0
+
+
+ContentIn = Union[QaContentIn, McqContentIn]
+
+
+class LevelIn(BaseModel):
+    level_index: int = Field(ge=0)
+    content: ContentIn
+
+    @root_validator(pre=True)
+    def parse_content_union(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Payload приходит как:
+        {
+          "level_index": 0,
+          "content": { ... }
+        }
+
+        Так как в content нет discriminator-поля (kind/type),
+        определяем тип по наличию ключей options/correctOptionId. [web:2]
+        """
+        c = values.get("content") or {}
+
+        if isinstance(c, dict) and ("options" in c or "correctOptionId" in c):
+            values["content"] = McqContentIn(**c)
+        else:
+            values["content"] = QaContentIn(**c)
+
+        return values
+
+
 class ReplaceLevelsRequest(BaseModel):
-    levels: List[CardLevelPayload]
+    levels: List[LevelIn]
 
 
 class DeckSummary(BaseModel):

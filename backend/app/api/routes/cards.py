@@ -1,6 +1,6 @@
 # backend/app/api/routes/cards.py
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -22,6 +22,8 @@ from starlette import status
 from app.models import Deck
 from app.schemas.cards import CardSummary
 from app.schemas.cards import ReplaceLevelsRequest
+
+from app.schemas.cards import QaContentIn, McqContentIn
 
 router = APIRouter()
 
@@ -466,38 +468,82 @@ def update_card_levels(
     if not deck or deck.owner_id != userid:
         raise HTTPException(status_code=403, detail="Deck not accessible")
 
-    existing = (
-        db.query(CardLevel)
-        .filter(CardLevel.card_id == card_id)
-        .order_by(CardLevel.level_index.asc())
-        .all()
-    )
-
     if not payload.levels:
         raise HTTPException(status_code=422, detail="At least 1 level is required")
 
-    # Вариант 1 (самый безопасный): строго одинаковое число уровней
-    if len(payload.levels) != len(existing):
-        raise HTTPException(status_code=409, detail="Levels count mismatch")
+    if len(payload.levels) > 10:
+        raise HTTPException(status_code=422, detail="Too many levels (max 10)")
 
-    for i, lvl in enumerate(payload.levels):
-        q = lvl.question.strip()
-        a = lvl.answer.strip()
-        if not q or not a:
-            raise HTTPException(status_code=422, detail="Level question/answer must be non-empty")
+    # Приведём к порядку по level_index (раз у тебя он есть в payload)
+    incoming = sorted(payload.levels, key=lambda x: x.level_index)
 
-        existing[i].content = {"question": q, "answer": a}
+    # (опционально) проверим что индексы подряд 0..n-1, иначе можно словить странные дыры
+    for expected_idx, lvl in enumerate(incoming):
+        if lvl.level_index != expected_idx:
+            raise HTTPException(status_code=422, detail="level_index must be sequential starting from 0")
 
+    # Полная замена: удаляем старые и пишем новые (так поддерживается изменение количества уровней)
+    db.query(CardLevel).filter(CardLevel.card_id == card_id).delete(synchronize_session=False)
+    db.flush()
+
+    new_rows: List[CardLevel] = []
+
+    for idx, lvl in enumerate(incoming):
+        c = lvl.content
+
+        if isinstance(c, QaContentIn):
+            q = (c.question or "").strip()
+            a = (c.answer or "").strip()
+            if not q or not a:
+                raise HTTPException(status_code=422, detail="QA level question/answer must be non-empty")
+
+            content: Dict[str, Any] = {"question": q, "answer": a}
+
+        elif isinstance(c, McqContentIn):
+            q = (c.question or "").strip()
+            if not q:
+                raise HTTPException(status_code=422, detail="MCQ question must be non-empty")
+
+            options = [{"id": str(o.id), "text": (o.text or "").strip()} for o in (c.options or [])]
+            options = [o for o in options if o["text"]]
+
+            if len(options) < 2:
+                raise HTTPException(status_code=422, detail="MCQ must have at least 2 non-empty options")
+
+            ids = [o["id"] for o in options]
+            if len(set(ids)) != len(ids):
+                raise HTTPException(status_code=422, detail="MCQ option ids must be unique")
+
+            correct_id = str(c.correctOptionId)
+            if correct_id not in set(ids):
+                raise HTTPException(status_code=422, detail="MCQ correctOptionId must match one of options")
+
+            content = {
+                "question": q,
+                "options": options,
+                "correctOptionId": correct_id,
+                "explanation": (c.explanation or "").strip(),
+                "timerSec": int(c.timerSec or 0),
+            }
+
+        else:
+            raise HTTPException(status_code=422, detail="Unsupported level content")
+
+        row = CardLevel(
+            card_id=card_id,
+            level_index=idx,
+            content=content,
+        )
+        new_rows.append(row)
+
+    db.add_all(new_rows)
     db.commit()
 
     return CardSummary(
         card_id=card.id,
         title=card.title,
         type=card.type,
-        levels=[
-            CardLevelContent(level_index=l.level_index, content=l.content)
-            for l in existing
-        ],
+        levels=[CardLevelContent(level_index=r.level_index, content=r.content) for r in new_rows],
     )
 
 @router.delete("/{card_id}/progress", status_code=204)
