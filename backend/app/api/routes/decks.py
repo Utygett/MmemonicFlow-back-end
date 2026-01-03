@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import random
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -412,3 +413,106 @@ def update_deck(
         owner_id=deck.owner_id,
         is_public=deck.is_public,
     )
+
+
+@router.get("/{deck_id}/study-cards")
+def get_study_cards(
+    deck_id: UUID,
+    mode: str = Query(..., pattern="^(random|ordered|new_random|new_ordered)$"),
+    include: str = Query("full"),
+    limit: Optional[int] = Query(default=None, ge=1, le=200),
+    seed: Optional[int] = Query(default=None),
+    user_id: UUID = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    if include != "full":
+        raise HTTPException(status_code=422, detail="Only include=full is supported")
+
+    # доступ как в /session: owner или public
+    deck = db.query(Deck).filter(
+        Deck.id == deck_id,
+        (Deck.owner_id == user_id) | (Deck.is_public == True)
+    ).first()
+    if not deck:
+        raise HTTPException(status_code=403, detail="Deck not accessible")
+
+    cards: List[Card] = (
+        db.query(Card)
+        .filter(Card.deck_id == deck_id)
+        .order_by(Card.created_at.asc())
+        .all()
+    )
+    if not cards:
+        return {"cards": []}
+
+    # Для new_*: исключаем все карточки, у которых уже есть хоть какой-то прогресс
+    if mode in ("new_random", "new_ordered"):
+        all_ids = [c.id for c in cards]
+        progressed_ids = {
+            row[0]
+            for row in (
+                db.query(CardProgress.card_id)
+                .filter(CardProgress.user_id == user_id, CardProgress.card_id.in_(all_ids))
+                .distinct()
+                .all()
+            )
+        }
+        cards = [c for c in cards if c.id not in progressed_ids]
+
+    # random / new_random: перемешиваем (seed делает это детерминированно)
+    if mode in ("random", "new_random"):
+        rnd = random.Random(seed) if seed is not None else random.Random()
+        rnd.shuffle(cards)
+
+    # limit после финального порядка
+    if limit is not None:
+        cards = cards[:limit]
+
+    if not cards:
+        return {"cards": []}
+
+    card_ids = [c.id for c in cards]
+
+    # Уровни пачкой
+    levels_all: List[CardLevel] = (
+        db.query(CardLevel)
+        .filter(CardLevel.card_id.in_(card_ids))
+        .order_by(CardLevel.card_id.asc(), CardLevel.level_index.asc())
+        .all()
+    )
+    levels_by_card: dict[UUID, List[CardLevel]] = {}
+    for lvl in levels_all:
+        levels_by_card.setdefault(lvl.card_id, []).append(lvl)
+
+    # activeLevel: читаем ТОЛЬКО активный прогресс (ничего не создаём)
+    active_level_index_by_card: dict[UUID, int] = {}
+    if mode in ("random", "ordered"):
+        active_rows = (
+            db.query(CardProgress.card_id, CardLevel.level_index)
+            .join(CardLevel, CardLevel.id == CardProgress.card_level_id)
+            .filter(
+                CardProgress.user_id == user_id,
+                CardProgress.card_id.in_(card_ids),
+                CardProgress.is_active == True,
+            )
+            .all()
+        )
+        active_level_index_by_card = {card_id: lvl_index for card_id, lvl_index in active_rows}
+
+    # Ответ в формате фронта (camelCase + нужные поля)
+    out = []
+    for c in cards:
+        lvls = levels_by_card.get(c.id, [])
+        if not lvls:
+            continue
+
+        out.append({
+            "id": str(c.id),
+            "deckId": str(c.deck_id),
+            "title": c.title,
+            "type": c.type,
+            "levels": [{"levelIndex": l.level_index, "content": l.content} for l in lvls],
+            "activeLevel": active_level_index_by_card.get(c.id, 0),
+        })
+
+    return {"cards": out}
