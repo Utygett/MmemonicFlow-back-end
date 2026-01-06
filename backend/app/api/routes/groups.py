@@ -16,10 +16,10 @@ from app.models.user_study_group_deck import UserStudyGroupDeck
 from app.models.deck import Deck
 from app.models.card import Card
 from app.auth.dependencies import get_current_user_id
-
 from app.schemas.group import UserGroupResponse, GroupKind
 from app.schemas.cards import DeckDetail
 from app.models import CardProgress
+from app.models import CardReviewHistory
 
 router = APIRouter()
 
@@ -381,11 +381,14 @@ def get_group_decks_summary(
     )
     completed_by_deck = {deck_id: cnt for deck_id, cnt in completed_rows}
 
-    # count_repeat = count(progress rows) по колоде
+    # count_repeat = count(CardReviewHistory) по колоде
     repeat_rows = (
-        db.query(Card.deck_id, func.count(CardProgress.id))
-        .join(CardProgress, CardProgress.card_id == Card.id)
-        .filter(Card.deck_id.in_(deck_ids), CardProgress.user_id == user_id)
+        db.query(Card.deck_id, func.count(CardReviewHistory.id))
+        .join(CardReviewHistory, CardReviewHistory.card_id == Card.id)
+        .filter(
+            Card.deck_id.in_(deck_ids),
+            CardReviewHistory.user_id == user_id,
+        )
         .group_by(Card.deck_id)
         .all()
     )
