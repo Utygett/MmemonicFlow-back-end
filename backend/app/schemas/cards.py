@@ -154,6 +154,11 @@ class DeckDetail(BaseModel):
     owner_id: UUID
     is_public: bool
 
+    count_repeat: int = 0
+    count_for_repeat: int = 0
+    cards_count: int = 0
+    completed_cards_count: int = 0
+
     model_config = ConfigDict(from_attributes=True)
 
 

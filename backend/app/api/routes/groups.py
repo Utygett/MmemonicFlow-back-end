@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -16,10 +18,8 @@ from app.models.card import Card
 from app.auth.dependencies import get_current_user_id
 
 from app.schemas.group import UserGroupResponse, GroupKind
-
-from app.models import StudyGroupDeck
-
 from app.schemas.cards import DeckDetail
+from app.models import CardProgress
 
 router = APIRouter()
 
@@ -348,7 +348,6 @@ def get_group_decks_summary(
     if not ug:
         raise HTTPException(404, "Group not found or access denied")
 
-    # читать summary можно и для subscription-группы, но колоды всё равно лежат в UserStudyGroupDeck
     links = (
         db.query(UserStudyGroupDeck)
         .filter(UserStudyGroupDeck.user_group_id == ug.id)
@@ -362,5 +361,74 @@ def get_group_decks_summary(
     decks = db.query(Deck).filter(Deck.id.in_(deck_ids)).all()
     deck_by_id = {d.id: d for d in decks}
 
-    # Важно: DeckDetail должен уметь принимать ORM Deck (ownerid/ispublic/id и т.д.)
-    return [DeckDetail.model_validate(deck_by_id[did]) for did in deck_ids if did in deck_by_id]
+    # --- агрегаты ---
+    # cards_count
+    cards_count_rows = (
+        db.query(Card.deck_id, func.count(Card.id))
+        .filter(Card.deck_id.in_(deck_ids))
+        .group_by(Card.deck_id)
+        .all()
+    )
+    cards_count_by_deck = {deck_id: cnt for deck_id, cnt in cards_count_rows}
+
+    # completed_cards_count = distinct card_id in CardProgress
+    completed_rows = (
+        db.query(Card.deck_id, func.count(func.distinct(CardProgress.card_id)))
+        .join(CardProgress, CardProgress.card_id == Card.id)
+        .filter(Card.deck_id.in_(deck_ids), CardProgress.user_id == user_id)
+        .group_by(Card.deck_id)
+        .all()
+    )
+    completed_by_deck = {deck_id: cnt for deck_id, cnt in completed_rows}
+
+    # count_repeat = count(progress rows) по колоде
+    repeat_rows = (
+        db.query(Card.deck_id, func.count(CardProgress.id))
+        .join(CardProgress, CardProgress.card_id == Card.id)
+        .filter(Card.deck_id.in_(deck_ids), CardProgress.user_id == user_id)
+        .group_by(Card.deck_id)
+        .all()
+    )
+    repeat_by_deck = {deck_id: cnt for deck_id, cnt in repeat_rows}
+
+    # count_for_repeat = distinct card_id where active and next_review <= now
+    now = datetime.now(timezone.utc)
+    due_rows = (
+        db.query(Card.deck_id, func.count(func.distinct(CardProgress.card_id)))
+        .join(CardProgress, CardProgress.card_id == Card.id)
+        .filter(
+            Card.deck_id.in_(deck_ids),
+            CardProgress.user_id == user_id,
+            CardProgress.is_active == True,
+            CardProgress.next_review.isnot(None),
+            CardProgress.next_review <= now,
+        )
+        .group_by(Card.deck_id)
+        .all()
+    )
+    due_by_deck = {deck_id: cnt for deck_id, cnt in due_rows}
+
+    # --- собрать ответ в порядке links ---
+    out: List[DeckDetail] = []
+    for did in deck_ids:
+        d = deck_by_id.get(did)
+        if not d:
+            continue
+
+        out.append(
+            DeckDetail(
+                id=d.id,  # заполнит deck_id через validation_alias
+                title=d.title,
+                description=d.description,
+                color=d.color,
+                owner_id=d.owner_id,
+                is_public=d.is_public,
+
+                cards_count=cards_count_by_deck.get(did, 0),
+                completed_cards_count=completed_by_deck.get(did, 0),
+                count_repeat=repeat_by_deck.get(did, 0),
+                count_for_repeat=due_by_deck.get(did, 0),
+            )
+        )
+
+    return out
