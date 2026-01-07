@@ -9,7 +9,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend ./backend
 
-# ВАЖНО: добавить /app/backend в путь импорта
+# Alembic файлы (лежат рядом с Dockerfile)
+COPY alembic.ini .
+COPY migrations ./migrations
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 ENV PYTHONPATH=/app/backend
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/entrypoint.sh"]

@@ -334,6 +334,7 @@ def remove_deck_from_group(
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
 @router.get("/{user_group_id}/decks/summary", response_model=List[DeckDetail])
 def get_group_decks_summary(
     user_group_id: UUID,
