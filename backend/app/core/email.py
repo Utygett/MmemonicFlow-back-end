@@ -23,7 +23,8 @@ async def send_email(to: str, subject: str, html_body: str):
         port=settings.SMTP_PORT,
         username=settings.SMTP_USER,
         password=settings.SMTP_PASSWORD,
-        use_tls=settings.SMTP_USE_TLS,
+        start_tls=True,
+        use_tls=False,
     )
 
 
