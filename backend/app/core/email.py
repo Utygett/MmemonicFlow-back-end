@@ -32,7 +32,7 @@ def build_verification_email(token: str, base_url: str) -> str:
     """
     HTML-шаблон письма для подтверждения email.
     """
-    link = f"{base_url}/verify-email?token={token}"
+    link = f"{base_url}/#/verify-email?token={token}"
     return f"""
     <html>
       <body>
@@ -49,7 +49,7 @@ def build_password_reset_email(token: str, base_url: str) -> str:
     """
     HTML-шаблон письма для сброса пароля.
     """
-    link = f"{base_url}/reset-password?token={token}"
+    link = f"{base_url}/#/reset-password?token={token}"
     return f"""
     <html>
       <body>
