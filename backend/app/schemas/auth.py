@@ -30,6 +30,3 @@ class UserResponse(BaseModel):
     username: str
 
     model_config = ConfigDict(from_attributes=True)
-
-
-# https://mnemonicflow.ru/#/verify-email?token=WT1QosYUcb4EC0i3QyEeQCsQ-jT5qWBaEgZgRYohpRo
