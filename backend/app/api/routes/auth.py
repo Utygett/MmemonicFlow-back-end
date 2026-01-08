@@ -11,9 +11,9 @@ from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserR
 from app.auth.jwt import create_access_token, create_refresh_token, decode_refresh_token
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
-
 from app.core.email import send_email, build_verification_email, build_password_reset_email
 from app.core.config import settings
+from app.schemas.auth import RegisterResponse
 
 router = APIRouter(tags=["auth"])
 security = HTTPBearer()
@@ -39,14 +39,13 @@ def me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-@router.post("/register", response_model=TokenResponse)
+@router.post("/register", response_model=RegisterResponse, status_code=201)
 async def register(data: RegisterRequest, db: Session = Depends(get_db)):
     email = data.email.strip().lower()
     existing_user = db.query(User).filter(User.email == email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="User already exists")
 
-    # Генерируем токен для подтверждения email
     verification_token = secrets.token_urlsafe(32)
     verification_expires = datetime.now(timezone.utc) + timedelta(hours=24)
 
@@ -71,14 +70,8 @@ async def register(data: RegisterRequest, db: Session = Depends(get_db)):
         # Логируй ошибку, но не прерывай регистрацию
         print(f"Failed to send verification email: {e}")
 
-    # Выдаём токены сразу (можно опционально делать это только после верификации)
-    access = create_access_token({"sub": str(user.id)})
-    refresh = create_refresh_token({"sub": str(user.id)})
-
-    return TokenResponse(
-        access_token=access,
-        refresh_token=refresh,
-        token_type="bearer",
+    return RegisterResponse(
+        message="Регистрация успешна. Подтвердите email и затем войдите.",
     )
 
 
@@ -87,18 +80,18 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
     email = data.email.strip().lower()
     user = db.query(User).filter(User.email == email).first()
     if not user or not verify_password(data.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail={"code": "INVALID_CREDENTIALS", "message": "invalid login or pass"})
 
     # Опционально: блокируй вход, если email не подтверждён
-    # if not user.is_email_verified:
-    #     raise HTTPException(status_code=403, detail="Email not verified")
+    if not user.is_email_verified:
+         raise HTTPException(status_code=403, detail={"code": "EMAIL_NOT_VERIFIED", "message": "email not verified"})
 
     access = create_access_token({"sub": str(user.id)})
-    refresh = create_refresh_token({"sub": str(user.id)})
+    refresh_token = create_refresh_token({"sub": str(user.id)})
 
     return TokenResponse(
         access_token=access,
-        refresh_token=refresh,
+        refresh_token=refresh_token,
         token_type="bearer",
     )
 

@@ -1,13 +1,8 @@
 from fastapi import FastAPI, APIRouter
-from app.api.routes import cards
 from app.api.routes import cards, groups
-import app.models
 from app.api.routes import auth
 from starlette.middleware.cors import CORSMiddleware
-
 from app.api.routes import decks
-
-from app.db.init_db import init_db
 
 app = FastAPI(title="Flashcards API")
 

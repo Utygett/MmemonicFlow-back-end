@@ -11,6 +11,9 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=6)
 
 
+class RegisterResponse(BaseModel):
+    message: str
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str  # <-- добавляешь refresh
@@ -27,3 +30,6 @@ class UserResponse(BaseModel):
     username: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# https://mnemonicflow.ru/#/verify-email?token=WT1QosYUcb4EC0i3QyEeQCsQ-jT5qWBaEgZgRYohpRo
