@@ -230,17 +230,18 @@ def review_card(
 
     settings = _ensure_settings(db, user_uuid)
     progress = _ensure_active_progress(db, user_id=user_uuid, card=card, settings=settings)
-
+    # 1) считаем review на основе "времени оценки" от фронта
     updated = ReviewService.review(
         progress=progress,
         rating=request.rating.value,
         settings=settings,
+        rated_at=request.rated_at,
     )
 
-    # применяем результат к ORM progress
+    # фиксируем прогресс по клиентскому времени
     progress.stability = updated.stability
     progress.difficulty = updated.difficulty
-    progress.last_reviewed = updated.last_reviewed
+    progress.last_reviewed = request.rated_at
     progress.next_review = updated.next_review
     db.add(progress)
 
@@ -249,23 +250,12 @@ def review_card(
         card_id=card.id,
         card_level_id=progress.card_level_id,
         rating=request.rating,
-        interval_minutes=int((progress.next_review - progress.last_reviewed).total_seconds() // 60),
-        reviewed_at=progress.last_reviewed,
+        interval_minutes=int((progress.next_review - request.rated_at).total_seconds() // 60),
+        reviewed_at=request.rated_at,  # 3-е время (ratedAt) сохраняем сюда
+        show_at=request.shown_at,  # shownAt -> show_at
+        reveal_at=request.revealed_at,  # revealedAt -> reveal_at (может быть None)
     )
     db.add(history_entry)
-
-    db.commit()
-    db.refresh(progress)
-
-    level = db.get(CardLevel, progress.card_level_id)
-    return ReviewResponse(
-        card_id=card.id,
-        card_level_id=level.id,
-        level_index=level.level_index,
-        stability=progress.stability,
-        difficulty=progress.difficulty,
-        next_review=progress.next_review,
-    )
 
 
 @router.post("/{card_id}/level_up")
