@@ -47,11 +47,9 @@ class CardReviewHistory(Base):
 
     interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    show_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-
-    reveal_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-
-    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    show_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reveal_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     user = relationship("User", back_populates="review_history")
     card = relationship("Card", back_populates="review_history")

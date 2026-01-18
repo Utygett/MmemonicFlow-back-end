@@ -214,11 +214,10 @@ def get_cards_for_review(
         )
     return result
 
-
 @router.post("/{card_id}/review", response_model=ReviewResponse)
-def review_card(
+async def review_card(
     card_id: UUID,
-    request: ReviewRequest,
+    payload: ReviewRequest,
     user_id: UUID = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -230,18 +229,17 @@ def review_card(
 
     settings = _ensure_settings(db, user_uuid)
     progress = _ensure_active_progress(db, user_id=user_uuid, card=card, settings=settings)
-    # 1) считаем review на основе "времени оценки" от фронта
+
     updated = ReviewService.review(
         progress=progress,
-        rating=request.rating.value,
+        rating=payload.rating.value,
         settings=settings,
-        rated_at=request.rated_at,
+        rated_at=payload.rated_at,
     )
 
-    # фиксируем прогресс по клиентскому времени
     progress.stability = updated.stability
     progress.difficulty = updated.difficulty
-    progress.last_reviewed = request.rated_at
+    progress.last_reviewed = payload.rated_at
     progress.next_review = updated.next_review
     db.add(progress)
 
@@ -249,13 +247,26 @@ def review_card(
         user_id=user_uuid,
         card_id=card.id,
         card_level_id=progress.card_level_id,
-        rating=request.rating,
-        interval_minutes=int((progress.next_review - request.rated_at).total_seconds() // 60),
-        reviewed_at=request.rated_at,  # 3-е время (ratedAt) сохраняем сюда
-        show_at=request.shown_at,  # shownAt -> show_at
-        reveal_at=request.revealed_at,  # revealedAt -> reveal_at (может быть None)
+        rating=payload.rating,
+        interval_minutes=int((progress.next_review - payload.rated_at).total_seconds() // 60),
+        show_at=payload.shown_at,
+        reveal_at=payload.revealed_at or payload.rated_at,
+        reviewed_at=payload.rated_at,
     )
     db.add(history_entry)
+
+    db.commit()
+    db.refresh(progress)
+
+    level = db.get(CardLevel, progress.card_level_id)
+    return ReviewResponse(
+        card_id=card.id,
+        card_level_id=level.id,
+        level_index=level.level_index,
+        stability=progress.stability,
+        difficulty=progress.difficulty,
+        next_review=progress.next_review,
+    )
 
 
 @router.post("/{card_id}/level_up")
